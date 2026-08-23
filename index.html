@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="81|00 Risorse">
+<meta name="theme-color" content="#155e75">
+<title>81|00 Risorse &amp; Depositi</title>
+<link rel="manifest" href="manifest.json?v=1">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=1">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png?v=1">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     LOGIN 81|00 — modulo condiviso (identico alle altre app dell'ecosistema)
+     ═══════════════════════════════════════════════════════════════════════ -->
+<script>
+(function(){
+  'use strict';
+  // ── CONFIG (cambia solo queste per ogni app) ─────────────────────────────
+  var MODE = 'email';                 // 'email' oppure 'pin'
+  var APP  = 'Risorse & Depositi';
+  // ── COSTANTI ECOSISTEMA (uguali per tutte) ───────────────────────────────
+  var SB_URL  = 'https://xqbhujcnjvwbwzpwjujf.supabase.co';
+  var SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhxYmh1amNuanZ3Ynd6cHdqdWpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MzM4ODUsImV4cCI6MjA5NzMwOTg4NX0.VstO3aII143jpPXjgKg0t3du-yc5rS9xs2hYko_2DRs';
+  var PIN_EMAIL = 'giaquinto.giuseppe+campo@gmail.com';
+  var LSK = 'sb81_sess';
+  var RESET_URL = 'https://giaquintogiuseppe-bit.github.io/ottantunocento-gestionale/reset.html';
+  var _fetch = window.fetch.bind(window);
+  var STORE = (MODE === 'pin') ? window.sessionStorage : window.localStorage;
+
+  // ── sessione ─────────────────────────────────────────────────────────────
+  function getSess(){ try{ return JSON.parse(STORE.getItem(LSK)||'null'); }catch(e){ return null; } }
+  function setSess(s){ try{ s ? STORE.setItem(LSK, JSON.stringify(s)) : STORE.removeItem(LSK); }catch(e){} }
+  function valida(s){ return s && s.access_token && s.expires_at && (Date.now()/1000 < s.expires_at - 60); }
+  function salva(j){ setSess({ access_token:j.access_token, refresh_token:j.refresh_token,
+    expires_at: j.expires_at || (Math.floor(Date.now()/1000) + (j.expires_in||3600)) }); }
+
+  // ── fetch patchato: inietta il token utente sulle chiamate Supabase ──────
+  window.fetch = function(input, init){
+    try{
+      var url = (typeof input === 'string') ? input : (input && input.url) || '';
+      if(url.indexOf(SB_URL) === 0 && url.indexOf('/auth/v1/') < 0){
+        var s = getSess();
+        if(s && s.access_token){
+          var h = new Headers((init && init.headers) || (typeof input!=='string' && input.headers) || {});
+          h.set('apikey', SB_ANON);
+          h.set('Authorization', 'Bearer ' + s.access_token);
+          init = Object.assign({}, init, { headers: h });
+          if(typeof input !== 'string') input = input.url;
+        }
+      }
+    }catch(e){}
+    return _fetch(input, init);
+  };
+
+  // ── chiamate auth diritte (niente librerie) ──────────────────────────────
+  function login(email, password){
+    return _fetch(SB_URL + '/auth/v1/token?grant_type=password', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SB_ANON },
+      body: JSON.stringify({ email: email, password: password })
+    }).then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); });
+  }
+  function refresh(rt){
+    return _fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SB_ANON },
+      body: JSON.stringify({ refresh_token: rt })
+    }).then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); });
+  }
+  function recover(email){
+    return _fetch(SB_URL + '/auth/v1/recover?redirect_to=' + encodeURIComponent(RESET_URL), {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SB_ANON },
+      body: JSON.stringify({ email: email })
+    }).then(function(r){ return { ok:r.ok }; });
+  }
+
+  // ── overlay di login ─────────────────────────────────────────────────────
+  function css(){
+    if(document.getElementById('l81-css')) return;
+    var st=document.createElement('style'); st.id='l81-css';
+    st.textContent = ''+
+    '#l81{position:fixed;inset:0;z-index:2147483000;background:linear-gradient(135deg,#0e3a49,#155e75);'+
+      'display:flex;align-items:center;justify-content:center;font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:20px}'+
+    '#l81 .box{background:#fff;border-radius:16px;padding:28px 24px;width:100%;max-width:340px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4)}'+
+    '#l81 .ey{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#c69a3e;font-weight:700}'+
+    '#l81 h2{margin:6px 0 2px;color:#152238;font-size:20px}'+
+    '#l81 .sub{color:#5a6272;font-size:13px;margin-bottom:18px}'+
+    '#l81 input{width:100%;padding:13px;border:1px solid #d4dae0;border-radius:9px;font-size:16px;margin-bottom:10px;text-align:center}'+
+    '#l81 input:focus{outline:2px solid #155e75;border-color:#155e75}'+
+    '#l81 .pin{letter-spacing:.4em;font-weight:700}'+
+    '#l81 button{width:100%;padding:13px;border:none;border-radius:9px;background:#155e75;color:#fff;font-size:16px;font-weight:700;cursor:pointer}'+
+    '#l81 button:active{background:#104c5e}'+
+    '#l81 .err{color:#a63b3b;font-size:13px;min-height:18px;margin-top:8px}';
+    document.head.appendChild(st);
+  }
+  function overlay(){
+    css();
+    var wrap=document.createElement('div'); wrap.id='l81';
+    var isPin = (MODE==='pin');
+    wrap.innerHTML =
+      '<div class="box">'+
+        '<div class="ey">Ottantunocento S.r.l.</div>'+
+        '<h2>'+APP+'</h2>'+
+        '<div class="sub">'+(isPin?'Inserisci il PIN per accedere':'Accedi con email e password')+'</div>'+
+        (isPin
+          ? '<input id="l81pin" class="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="••••••" maxlength="12">'
+          : '<input id="l81em" type="email" placeholder="email" autocomplete="username">'+
+            '<input id="l81pw" type="password" placeholder="password" autocomplete="current-password">')+
+        '<button id="l81go">Entra</button>'+
+        '<div class="err" id="l81err"></div>'+
+        (isPin?'':'<div id="l81fg" style="margin-top:14px;font-size:13px"><a href="#" id="l81fga" style="color:#155e75;font-weight:600;text-decoration:underline">Password dimenticata?</a></div>')+
+      '</div>';
+    document.body.appendChild(wrap);
+    var go=document.getElementById('l81go'), err=document.getElementById('l81err');
+    function fail(m){ err.textContent = m || 'Accesso non riuscito'; go.disabled=false; go.textContent='Entra'; }
+    function attempt(){
+      err.textContent=''; go.disabled=true; go.textContent='Attendo…';
+      var email, pw;
+      if(isPin){ pw = (document.getElementById('l81pin').value||'').trim(); email = PIN_EMAIL;
+        if(!pw){ return fail('Inserisci il PIN'); } }
+      else { email=(document.getElementById('l81em').value||'').trim(); pw=document.getElementById('l81pw').value||'';
+        if(!email||!pw){ return fail('Inserisci email e password'); } }
+      login(email, pw).then(function(res){
+        if(res.ok && res.j.access_token){ salva(res.j); location.reload(); }
+        else { fail(isPin ? 'PIN errato' : (res.j.error_description || 'Email o password errati')); }
+      }).catch(function(){ fail('Errore di rete, riprova'); });
+    }
+    go.addEventListener('click', attempt);
+    var fga=document.getElementById('l81fga');
+    if(fga) fga.addEventListener('click', function(ev){
+      ev.preventDefault();
+      var em=(document.getElementById('l81em').value||'').trim();
+      if(!em){ err.textContent='Scrivi prima la tua email qui sopra, poi tocca "Password dimenticata?".'; return; }
+      var emSafe=em.replace(/[<>&]/g,''); err.textContent=''; fga.textContent='Invio…';
+      recover(em).then(function(){
+        document.querySelector('#l81 .box').innerHTML=
+          '<div class="ey">Ottantunocento S.r.l.</div>'+
+          '<h2>Controlla l\'email</h2>'+
+          '<div class="sub">Se <b>'+emSafe+'</b> è un account valido, ti abbiamo inviato un link per reimpostare la password. Aprila e segui il link (guarda anche nello spam).</div>'+
+          '<button onclick="location.reload()">Torna al login</button>';
+      }).catch(function(){ err.textContent='Invio non riuscito, riprova tra poco.'; fga.textContent='Password dimenticata?'; });
+    });
+    wrap.addEventListener('keydown', function(e){ if(e.key==='Enter') attempt(); });
+    var first=document.getElementById(isPin?'l81pin':'l81em'); if(first) first.focus();
+  }
+
+  // ── tasto Esci (compare quando loggato) ──────────────────────────────────
+  function addLogout(){
+    function ins(){
+      if(document.getElementById('l81out')) return;
+      var b=document.createElement('button'); b.id='l81out'; b.type='button';
+      b.textContent='🔒 Esci';
+      b.setAttribute('style','position:fixed;bottom:calc(env(safe-area-inset-bottom) + 70px);left:12px;z-index:2147482000;'+
+        'background:rgba(21,34,56,.85);color:#fff;border:none;border-radius:20px;'+
+        'padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;'+
+        'font-family:-apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3)');
+      b.addEventListener('click', function(){
+        if(document.getElementById('l81cf')) return;
+        var m=document.createElement('div'); m.id='l81cf';
+        m.setAttribute('style','position:fixed;inset:0;z-index:2147483600;background:rgba(10,22,40,.6);display:flex;align-items:center;justify-content:center;font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:20px');
+        m.innerHTML='<div style="background:#fff;border-radius:14px;padding:22px;max-width:300px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4)">'+
+          '<div style="font-size:16px;font-weight:700;color:#152238;margin-bottom:6px">Uscire dall\'app?</div>'+
+          '<div style="font-size:13px;color:#5a6272;margin-bottom:16px">Dovrai reinserire email e password al prossimo accesso.</div>'+
+          '<button id="l81cfy" style="width:100%;padding:12px;border:none;border-radius:9px;background:#a63b3b;color:#fff;font-weight:700;font-size:15px;cursor:pointer;margin-bottom:8px">🔒 Esci</button>'+
+          '<button id="l81cfn" style="width:100%;padding:12px;border:1px solid #dcd6c8;border-radius:9px;background:#fff;color:#152238;font-weight:600;font-size:15px;cursor:pointer">Annulla</button>'+
+          '</div>';
+        document.body.appendChild(m);
+        document.getElementById('l81cfy').addEventListener('click', function(){ window.logout81(); });
+        document.getElementById('l81cfn').addEventListener('click', function(){ m.remove(); });
+      });
+      document.body.appendChild(b);
+    }
+    if(document.body) ins(); else document.addEventListener('DOMContentLoaded', ins);
+  }
+
+  // ── avvio: sessione valida? refresh? altrimenti login ────────────────────
+  function mostra(){ if(document.body) overlay(); else document.addEventListener('DOMContentLoaded', overlay); }
+  var s=getSess();
+  if(valida(s)){ addLogout(); return; }
+  if(s && s.refresh_token){
+    refresh(s.refresh_token).then(function(res){
+      if(res.ok && res.j.access_token){ salva(res.j); location.reload(); }
+      else { setSess(null); mostra(); }
+    }).catch(function(){ mostra(); });
+  } else { mostra(); }
+
+  window.logout81 = function(){
+    try{ window.localStorage.removeItem(LSK); }catch(e){}
+    try{ window.sessionStorage.removeItem(LSK); }catch(e){}
+    try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){}
+    location.reload();
+  };
+})();
+</script>
+</head>
+<body>
+<div id="app-root"></div>
+<div id="toast"></div>
+<div id="sheet-host"></div>
+
+<script>
+/* =====================================================================
+   81|00 Risorse & Depositi — master del parco attrezzature
+   Tabelle: risorse, allocazioni (movimenti), ubicazioni, depositi, categorie
+   ===================================================================== */
+"use strict";
+const SB_URL = 'https://xqbhujcnjvwbwzpwjujf.supabase.co';
+const REST = SB_URL + '/rest/v1/';
+
+/* ---------- stato ---------- */
+const S = { cat:[], ubi:[], dep:[], ris:[], mov:[], cantieri:[], loaded:false };
+let TAB = 'dash';
+let PARCO_FILTRO = 'tutti';   // tutti | quantita | univoca | consumabile
+let PARCO_Q = '';
+
+/* ---------- helper ---------- */
+const $  = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+const esc = s => (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = ()=> Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function fmtD(iso){ if(!iso) return '—'; const p=String(iso).slice(0,10).split('-'); return p.length===3? p[2]+'/'+p[1]+'/'+p[0].slice(2) : iso; }
+function fmtDlong(iso){ if(!iso) return '—'; const p=String(iso).slice(0,10).split('-'); return p.length===3? p[2]+'/'+p[1]+'/'+p[0] : iso; }
+function euro(n){ n=Number(n)||0; return '€ ' + n.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function num(n){ n=Number(n)||0; return n.toLocaleString('it-IT',{maximumFractionDigits:2}); }
+function toast(msg,ms=2200){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),ms); }
+
+/* ---------- API ---------- */
+async function apiGet(path){
+  const r = await fetch(REST+path, {headers:{'Accept':'application/json'}});
+  if(!r.ok) throw new Error('GET '+path+' → '+r.status+' '+(await r.text()));
+  return r.json();
+}
+async function apiSend(method, path, body){
+  const r = await fetch(REST+path, {
+    method,
+    headers:{'Content-Type':'application/json','Prefer':'return=representation'},
+    body: body!=null ? JSON.stringify(body) : undefined
+  });
+  if(!r.ok) throw new Error(method+' '+path+' → '+r.status+' '+(await r.text()));
+  const txt = await r.text();
+  return txt ? JSON.parse(txt) : null;
+}
+
+/* ---------- caricamento dati ---------- */
+async function loadAll(){
+  const [cat,ubi,dep,ris,mov] = await Promise.all([
+    apiGet('categorie?select=*&order=ordine.asc'),
+    apiGet('ubicazioni?select=*&order=tipo.asc,nome.asc'),
+    apiGet('depositi?select=*&order=nome.asc'),
+    apiGet('risorse?select=*'),
+    apiGet('allocazioni?select=*&order=data_uscita.desc')
+  ]);
+  S.cat=cat; S.ubi=ubi; S.dep=dep; S.ris=ris; S.mov=mov;
+  // cantieri dal blob del gestionale (solo lettura)
+  try{
+    const g = await apiGet('gestionale_dati?select=dati&limit=1');
+    const dati = g && g[0] && g[0].dati || {};
+    S.cantieri = (dati.cantieri||[]).map(c=>({id:c.id, nome:c.nome||c.name||c.cantiere||'(senza nome)', stato:c.stato}));
+  }catch(e){ S.cantieri=[]; console.warn('cantieri non caricati', e); }
+  S.loaded=true;
+}
+
+/* ---------- indici e calcoli ---------- */
+function catById(id){ return S.cat.find(c=>c.id===id); }
+function catLabel(r){ const c=catById(r.categoria_id); if(c) return (c.icona? c.icona+' ':'')+c.nome; return r.categoria||'Altro'; }
+function catIcona(r){ const c=catById(r.categoria_id); return c&&c.icona ? c.icona : '📦'; }
+function risById(id){ return S.ris.find(r=>r.id===id); }
+function movDi(rid){ return S.mov.filter(m=>m.risorsa_id===rid); }
+function isAperto(m){ return m.stato!=='rientrata' && !m.data_rientro_effettiva; }
+function isFuori(m){ return m.a_tipo && m.a_tipo!=='deposito'; }   // destinazione non-deposito = fuori
+// movimenti attivi OGGI (già usciti, non ancora rientrati) e fuori dal deposito
+function movFuoriOggi(rid, t){ t=t||todayISO();
+  return movDi(rid).filter(m=> isAperto(m) && isFuori(m) && m.data_uscita<=t && (!m.data_rientro || m.data_rientro>=t) );
+}
+function qtyFuoriOggi(rid,t){ return movFuoriOggi(rid,t).reduce((s,m)=>s+(Number(m.qty)||0),0); }
+// posizione attuale: array {luogo, tipo, qty}
+function posizione(r, t){ t=t||todayISO();
+  const fuori = movFuoriOggi(r.id,t);
+  const map = {};
+  fuori.forEach(m=>{ const k=m.a_nome||'?'; if(!map[k]) map[k]={luogo:k,tipo:m.a_tipo,qty:0}; map[k].qty+=Number(m.qty)||0; });
+  const arr = Object.values(map);
+  const inDep = (Number(r.qty_totale)||0) - qtyFuoriOggi(r.id,t);
+  if(inDep>0.0001 || arr.length===0){
+    const dn = depNome(r.deposito_base) || 'Deposito';
+    arr.unshift({luogo:dn, tipo:'deposito', qty: r.gestione==='univoca'? (arr.length? 0 : 1) : inDep});
+  }
+  return arr.filter(x=>x.qty>0.0001);
+}
+// rientri in ritardo (previsto < oggi, non rientrato)
+function movInRitardo(){ const t=todayISO();
+  return S.mov.filter(m=> isAperto(m) && isFuori(m) && m.data_rientro && m.data_rientro<t );
+}
+function movProgrammati(){ const t=todayISO();
+  return S.mov.filter(m=> isAperto(m) && isFuori(m) && m.data_uscita>t );
+}
+function movFuoriTuttiOggi(){ const t=todayISO();
+  return S.mov.filter(m=> isAperto(m) && isFuori(m) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t) );
+}
+function depNome(id){ const d=S.dep.find(x=>x.id===id); if(d) return d.nome; const u=S.ubi.find(x=>x.id===id); return u? u.nome : id; }
+// disponibilità in un periodo [d1,d2]
+function disponibilita(r, d1, d2){
+  const tot = Number(r.qty_totale)||0;
+  let impegnata = 0;
+  movDi(r.id).forEach(m=>{
+    if(!isAperto(m) || !isFuori(m)) return;
+    const a=m.data_uscita, b=m.data_rientro||'9999-12-31';
+    if(a<=d2 && b>=d1) impegnata += Number(m.qty)||0;   // sovrapposizione
+  });
+  return tot - impegnata;
+}
+function valoreParco(){
+  return S.ris.reduce((s,r)=> s + (Number(r.valore)||0) * (r.gestione==='univoca'? 1 : (Number(r.qty_totale)||0) ), 0);
+}
+
+/* =====================================================================
+   RENDER — shell
+   ===================================================================== */
+const NAV = [
+  {id:'dash',  ic:'📊', lb:'Panoramica'},
+  {id:'parco', ic:'📦', lb:'Parco'},
+  {id:'mov',   ic:'↔️', lb:'Movimenti'},
+  {id:'dep',   ic:'🏬', lb:'Depositi'}
+];
+function shell(){
+  const root=$('#app-root');
+  root.innerHTML = `
+    <header id="hdr">
+      <div class="brand"><span class="logo">81|00</span><span class="sub">Risorse &amp; Depositi</span></div>
+      <button id="btn-sync" class="sync" aria-label="Aggiorna">↻</button>
+    </header>
+    <main id="content"></main>
+    <nav id="nav">${NAV.map(n=>`<button class="nb ${n.id===TAB?'on':''}" data-tab="${n.id}"><span class="ni">${n.ic}</span>${n.lb}</button>`).join('')}</nav>`;
+  $('#btn-sync').addEventListener('click', reload);
+  $$('#nav .nb').forEach(b=> b.addEventListener('click', ()=>{ TAB=b.dataset.tab; render(); }));
+}
+async function reload(){ const b=$('#btn-sync'); if(b){b.classList.add('spin');} try{ await loadAll(); render(); toast('Aggiornato ✓'); }catch(e){ toast('Errore aggiornamento'); console.error(e);} finally{ if(b) b.classList.remove('spin'); } }
+function render(){
+  $$('#nav .nb').forEach(b=> b.classList.toggle('on', b.dataset.tab===TAB));
+  const c=$('#content'); if(!c) return;
+  if(TAB==='dash') c.innerHTML = viewDash();
+  else if(TAB==='parco'){ c.innerHTML = viewParco(); wireParco(); }
+  else if(TAB==='mov') c.innerHTML = viewMov();
+  else if(TAB==='dep') c.innerHTML = viewDep();
+  c.scrollTop=0;
+}
+
+/* =====================================================================
+   VIEW — Panoramica
+   ===================================================================== */
+function viewDash(){
+  const nRis=S.ris.length;
+  const nUniv=S.ris.filter(r=>r.gestione==='univoca').length;
+  const fuori=movFuoriTuttiOggi();
+  const ritardo=movInRitardo();
+  const prog=movProgrammati();
+  const val=valoreParco();
+  // rientri previsti nei prossimi 7 gg
+  const t=todayISO(); const d7=new Date(); d7.setDate(d7.getDate()+7); const t7=d7.toISOString().slice(0,10);
+  const rientri7=fuori.filter(m=>m.data_rientro && m.data_rientro>=t && m.data_rientro<=t7);
+
+  let html = `<div class="pg">
+    <div class="kpis">
+      <div class="kpi"><div class="kn">${nRis}</div><div class="kl">Risorse</div><div class="ks">${nUniv} attrezzi</div></div>
+      <div class="kpi"><div class="kn">${fuori.length}</div><div class="kl">Fuori adesso</div><div class="ks">in cantiere / su mezzo</div></div>
+      <div class="kpi ${ritardo.length?'warn':''}"><div class="kn">${ritardo.length}</div><div class="kl">Rientri scaduti</div><div class="ks">${ritardo.length?'da controllare':'tutto ok'}</div></div>
+      <div class="kpi"><div class="kn" style="font-size:19px">${euro(val)}</div><div class="kl">Valore parco</div><div class="ks">${prog.length} usc. programmate</div></div>
+    </div>`;
+
+  if(ritardo.length){
+    html += `<div class="sec-lbl warn-lbl">⚠️ Rientri scaduti</div><div class="list">`;
+    ritardo.sort((a,b)=>(a.data_rientro||'').localeCompare(b.data_rientro||'')).forEach(m=>{
+      const r=risById(m.risorsa_id);
+      html += rowMov(m, r, true);
+    });
+    html += `</div>`;
+  }
+
+  html += `<div class="sec-lbl">🚚 Fuori adesso</div>`;
+  if(!fuori.length){ html += `<div class="empty">Tutto in deposito. Niente materiale fuori.</div>`; }
+  else {
+    // raggruppa per luogo
+    const byLuogo={};
+    fuori.forEach(m=>{ const k=m.a_nome||'?'; (byLuogo[k]=byLuogo[k]||[]).push(m); });
+    html += `<div class="list">`;
+    Object.keys(byLuogo).sort().forEach(luogo=>{
+      const items=byLuogo[luogo];
+      html += `<div class="grp"><div class="grp-h">${items[0].a_tipo==='mezzo'?'🚐':'🏗️'} ${esc(luogo)} <span class="badge">${items.length}</span></div>`;
+      items.forEach(m=> html += rowMov(m, risById(m.risorsa_id), false, true));
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
+  if(rientri7.length){
+    html += `<div class="sec-lbl">📅 Rientri previsti (7 giorni)</div><div class="list">`;
+    rientri7.sort((a,b)=>(a.data_rientro||'').localeCompare(b.data_rientro||'')).forEach(m=>{
+      html += rowMov(m, risById(m.risorsa_id), false);
+    });
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+function rowMov(m, r, ritardo, hideLuogo){
+  const nome = r? r.nome : ('#'+m.risorsa_id);
+  const q = (Number(m.qty)||0);
+  const luogo = hideLuogo? '' : `<span class="mr-luogo">${m.a_tipo==='mezzo'?'🚐':'🏗️'} ${esc(m.a_nome||'')}</span>`;
+  return `<div class="row" onclick="apriRisorsa('${esc(m.risorsa_id)}')">
+    <div class="row-main"><div class="row-t">${esc(nome)}</div>
+      <div class="row-s">${q} ${esc(r?r.unita:'pz')} · uscita ${fmtD(m.data_uscita)} ${luogo}</div></div>
+    <div class="row-r">${ritardo
+      ? `<span class="pill red">rientro ${fmtD(m.data_rientro)}</span>`
+      : (m.data_rientro? `<span class="pill">↩ ${fmtD(m.data_rientro)}</span>`:`<span class="pill amber">aperto</span>`)}
+      <button class="mini" onclick="event.stopPropagation();rientroRapido(${m.id})">Rientro</button></div>
+  </div>`;
+}
+
+/* =====================================================================
+   VIEW — Parco (anagrafica)
+   ===================================================================== */
+function viewParco(){
+  const filtri=[['tutti','Tutti'],['quantita','A quantità'],['univoca','Attrezzi'],['consumabile','Consumabili']];
+  let list = S.ris.slice();
+  if(PARCO_FILTRO!=='tutti') list=list.filter(r=>r.gestione===PARCO_FILTRO);
+  if(PARCO_Q){ const q=PARCO_Q.toLowerCase(); list=list.filter(r=>(r.nome||'').toLowerCase().includes(q) || (catLabel(r)||'').toLowerCase().includes(q)); }
+  // raggruppa per categoria
+  const groups={};
+  list.forEach(r=>{ const k=r.categoria_id||'altro'; (groups[k]=groups[k]||[]).push(r); });
+  const order=S.cat.map(c=>c.id).concat(['altro']);
+  const keys=Object.keys(groups).sort((a,b)=>{ const ia=order.indexOf(a), ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
+
+  let html=`<div class="pg">
+    <div class="toolbar">
+      <input id="parco-q" class="search" type="search" placeholder="Cerca risorsa…" value="${esc(PARCO_Q)}">
+      <button class="add" onclick="nuovaRisorsa()">＋ Risorsa</button>
+    </div>
+    <div class="chips">${filtri.map(f=>`<button class="chip ${PARCO_FILTRO===f[0]?'on':''}" data-f="${f[0]}">${f[1]}</button>`).join('')}</div>`;
+  if(!list.length){ html+=`<div class="empty">Nessuna risorsa con questi filtri.</div>`; }
+  keys.forEach(k=>{
+    const c=catById(k);
+    const rs=groups[k].sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+    html+=`<div class="sec-lbl">${c?(c.icona+' '+c.nome):'📦 Altro'} <span class="cnt">${rs.length}</span></div><div class="list">`;
+    rs.forEach(r=>{
+      const pos=posizione(r);
+      const dove = pos.map(p=>`${p.qty>1||r.gestione!=='univoca'?num(p.qty)+' ':''}${p.tipo==='deposito'?'🏠':(p.tipo==='mezzo'?'🚐':'🏗️')} ${esc(p.luogo)}`).join(' · ');
+      const badge = r.gestione==='univoca'?'<span class="tag">attrezzo</span>':(r.gestione==='consumabile'?'<span class="tag grey">consumabile</span>':'');
+      html+=`<div class="row" onclick="apriRisorsa('${esc(r.id)}')">
+        <div class="row-main"><div class="row-t">${esc(r.nome)} ${badge}</div>
+          <div class="row-s">${r.gestione==='univoca'?'':'tot '+num(r.qty_totale)+' '+esc(r.unita)+' · '}${dove||'—'}</div></div>
+        <div class="row-r"><span class="chev">›</span></div>
+      </div>`;
+    });
+    html+=`</div>`;
+  });
+  html+=`</div>`;
+  return html;
+}
+function wireParco(){
+  $$('.chip').forEach(b=> b.addEventListener('click', ()=>{ PARCO_FILTRO=b.dataset.f; render(); }));
+  const q=$('#parco-q'); if(q){ q.addEventListener('input', e=>{ PARCO_Q=e.target.value; const pos=q.selectionStart; render(); const nq=$('#parco-q'); if(nq){ nq.focus(); try{nq.setSelectionRange(pos,pos);}catch(_){} } }); }
+}
+
+/* =====================================================================
+   VIEW — Movimenti (check-out / rientro / trasferimento)
+   ===================================================================== */
+function viewMov(){
+  const fuori=movFuoriTuttiOggi();
+  const prog=movProgrammati();
+  let html=`<div class="pg">
+    <div class="actions3">
+      <button class="act out" onclick="nuovoMovimento('uscita')"><span>📤</span>Esci</button>
+      <button class="act trf" onclick="nuovoMovimento('trasferimento')"><span>🔀</span>Trasferisci</button>
+      <button class="act in"  onclick="nuovoMovimento('rientro')"><span>📥</span>Rientro</button>
+    </div>
+    <div class="sec-lbl">Aperti — fuori adesso <span class="cnt">${fuori.length}</span></div>`;
+  if(!fuori.length){ html+=`<div class="empty">Nessun movimento aperto.</div>`; }
+  else { html+=`<div class="list">`; fuori.sort((a,b)=>(a.data_rientro||'9999').localeCompare(b.data_rientro||'9999')).forEach(m=> html+=rowMov(m, risById(m.risorsa_id), m.data_rientro&&m.data_rientro<todayISO())); html+=`</div>`; }
+  if(prog.length){
+    html+=`<div class="sec-lbl">Programmati (futuri) <span class="cnt">${prog.length}</span></div><div class="list">`;
+    prog.sort((a,b)=>(a.data_uscita||'').localeCompare(b.data_uscita||'')).forEach(m=> html+=rowMov(m, risById(m.risorsa_id)));
+    html+=`</div>`;
+  }
+  html+=`</div>`;
+  return html;
+}
+
+/* =====================================================================
+   VIEW — Depositi / Ubicazioni
+   ===================================================================== */
+function viewDep(){
+  const t=todayISO();
+  let html=`<div class="pg">
+    <div class="toolbar"><div class="th">Depositi &amp; ubicazioni</div><button class="add" onclick="nuovoDeposito()">＋ Deposito</button></div>`;
+  // depositi
+  S.dep.forEach(d=>{
+    const dentro = S.ris.filter(r=>r.deposito_base===d.id).length;
+    html+=`<div class="sec-lbl">🏠 ${esc(d.nome)}</div><div class="list"><div class="row"><div class="row-main"><div class="row-s">${dentro} risorse con base qui</div></div></div></div>`;
+  });
+  // mezzi (ubicazioni tipo mezzo) — cosa c'è su ciascuno adesso
+  const mezzi=S.ubi.filter(u=>u.tipo==='mezzo');
+  html+=`<div class="sec-lbl">🚐 Mezzi — cosa trasportano ora</div><div class="list">`;
+  mezzi.forEach(u=>{
+    const sopra=S.mov.filter(m=> isAperto(m) && m.a_tipo==='mezzo' && (m.a_id===u.rif_id||m.a_nome===u.nome) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t));
+    html+=`<div class="row"><div class="row-main"><div class="row-t">${esc(u.nome)}</div>
+      <div class="row-s">${sopra.length? sopra.map(m=>esc((risById(m.risorsa_id)||{}).nome||'?')).join(', ') : 'vuoto'}</div></div>
+      <div class="row-r"><span class="badge">${sopra.length}</span></div></div>`;
+  });
+  html+=`</div>`;
+  // esterni
+  const est=S.ubi.filter(u=>u.tipo==='esterno');
+  if(est.length){ html+=`<div class="sec-lbl">🌐 Esterni</div><div class="list">`; est.forEach(u=> html+=`<div class="row"><div class="row-main"><div class="row-t">${esc(u.nome)}</div></div></div>`); html+=`</div>`; }
+  html+=`<div style="height:20px"></div><button class="add wide" onclick="nuovoMezzo()">＋ Aggiungi mezzo / ubicazione</button></div>`;
+  return html;
+}
+
+/* =====================================================================
+   DETTAGLIO RISORSA + timeline viaggio
+   ===================================================================== */
+function apriRisorsa(id){
+  const r=risById(id); if(!r) return;
+  const pos=posizione(r);
+  const movs=movDi(id).slice().sort((a,b)=>(b.data_uscita||'').localeCompare(a.data_uscita||''));
+  const val = (Number(r.valore)||0)*(r.gestione==='univoca'?1:(Number(r.qty_totale)||0));
+  let body=`
+    <div class="dett-head">
+      <div class="dett-ic">${catIcona(r)}</div>
+      <div><div class="dett-t">${esc(r.nome)}</div>
+        <div class="dett-s">${esc(catLabel(r))} · ${r.gestione==='univoca'?'attrezzo (1 pz)':(r.gestione==='consumabile'?'consumabile':'tot '+num(r.qty_totale)+' '+esc(r.unita))}</div></div>
+    </div>
+    <div class="dett-grid">
+      ${r.matricola?`<div class="dg"><span>Matricola</span><b>${esc(r.matricola)}</b></div>`:''}
+      ${r.marca?`<div class="dg"><span>Marca</span><b>${esc(r.marca)}</b></div>`:''}
+      ${r.custode?`<div class="dg"><span>Custode</span><b>${esc(r.custode)}</b></div>`:''}
+      ${r.valore?`<div class="dg"><span>Valore</span><b>${euro(val)}</b></div>`:''}
+    </div>
+    <div class="sec-lbl">📍 Posizione attuale</div>
+    <div class="list">${pos.length? pos.map(p=>`<div class="row"><div class="row-main"><div class="row-t">${p.tipo==='deposito'?'🏠':(p.tipo==='mezzo'?'🚐':'🏗️')} ${esc(p.luogo)}</div></div><div class="row-r"><span class="pill">${num(p.qty)} ${esc(r.unita)}</span></div></div>`).join('') : '<div class="empty">In deposito.</div>'}</div>
+    <div class="sec-lbl">🧭 Viaggio — storico movimenti <span class="cnt">${movs.length}</span></div>`;
+  if(!movs.length){ body+=`<div class="empty">Nessun movimento registrato.</div>`; }
+  else {
+    body+=`<div class="timeline">`;
+    movs.forEach(m=>{
+      const aperto=isAperto(m)&&isFuori(m);
+      const stato = m.data_rientro_effettiva? 'rientrata il '+fmtD(m.data_rientro_effettiva)
+                  : (m.stato==='rientrata'?'rientrata':(aperto?(m.data_rientro&&m.data_rientro<todayISO()?'⚠️ rientro scaduto':'fuori'):(m.data_uscita>todayISO()?'programmata':m.stato)));
+      body+=`<div class="tl ${aperto?'open':''}">
+        <div class="tl-dot"></div>
+        <div class="tl-body">
+          <div class="tl-r"><b>${m.da_tipo==='deposito'?'🏠':(m.da_tipo==='mezzo'?'🚐':'🏗️')} ${esc(m.da_nome||'—')}</b> → <b>${m.a_tipo==='deposito'?'🏠':(m.a_tipo==='mezzo'?'🚐':'🏗️')} ${esc(m.a_nome||'—')}</b></div>
+          <div class="tl-s">${num(m.qty)} ${esc(r.unita)} · ${fmtD(m.data_uscita)} → ${m.data_rientro?fmtD(m.data_rientro):'aperto'} · <span class="st">${stato}</span></div>
+          ${aperto?`<button class="mini" onclick="rientroRapido(${m.id})">Registra rientro</button>`:''}
+        </div></div>`;
+    });
+    body+=`</div>`;
+  }
+  body+=`<div class="dett-foot"><button class="add" onclick="modificaRisorsa('${esc(r.id)}')">✏️ Modifica</button>
+    <button class="add ghost" onclick="nuovoMovimento('uscita','${esc(r.id)}')">📤 Fai uscire</button></div>`;
+  openSheet(esc(r.nome), body);
+}
+
+/* =====================================================================
+   SHEET (modale bottom) + form builder
+   ===================================================================== */
+function openSheet(title, html){
+  const host=$('#sheet-host');
+  host.innerHTML=`<div class="ov" onclick="closeSheet(event)"><div class="sheet" onclick="event.stopPropagation()">
+    <div class="sh-h"><div class="sh-t">${title}</div><button class="sh-x" onclick="closeSheet()">✕</button></div>
+    <div class="sh-b">${html}</div></div></div>`;
+  requestAnimationFrame(()=>{ const s=host.querySelector('.sheet'); if(s) s.classList.add('up'); });
+}
+function closeSheet(){ const host=$('#sheet-host'); if(host) host.innerHTML=''; }
+window.closeSheet=closeSheet; window.apriRisorsa=apriRisorsa;
+
+function fld(label, inner){ return `<label class="fld"><span>${label}</span>${inner}</label>`; }
+function optList(arr, sel){ return arr.map(o=>`<option value="${esc(o.v)}" ${o.v===sel?'selected':''}>${esc(o.l)}</option>`).join(''); }
+
+/* ---------- nuova / modifica risorsa ---------- */
+function nuovaRisorsa(){ formRisorsa(null); }
+function modificaRisorsa(id){ formRisorsa(risById(id)); }
+function formRisorsa(r){
+  const isNew=!r; r=r||{gestione:'quantita',unita:'pz',qty_totale:0,attiva:true,deposito_base:(S.dep[0]&&S.dep[0].id)||''};
+  const catOpts=S.cat.map(c=>({v:c.id,l:(c.icona||'')+' '+c.nome}));
+  const depOpts=S.dep.map(d=>({v:d.id,l:d.nome}));
+  const body=`<form id="frm-ris">
+    ${fld('Nome', `<input name="nome" required value="${esc(r.nome||'')}">`)}
+    ${fld('Categoria', `<select name="categoria_id">${optList(catOpts, r.categoria_id)}</select>`)}
+    ${fld('Tipo di gestione', `<select name="gestione">${optList([{v:'quantita',l:'A quantità (materiale)'},{v:'univoca',l:'Attrezzo (pezzo unico)'},{v:'consumabile',l:'Consumabile'}], r.gestione)}</select>`)}
+    <div class="frow">
+      ${fld('Quantità totale', `<input name="qty_totale" type="number" step="1" inputmode="numeric" value="${r.qty_totale!=null?r.qty_totale:0}">`)}
+      ${fld('Unità', `<input name="unita" value="${esc(r.unita||'pz')}">`)}
+    </div>
+    ${fld('Deposito base', `<select name="deposito_base">${optList(depOpts, r.deposito_base)}</select>`)}
+    <div class="frow">
+      ${fld('Matricola', `<input name="matricola" value="${esc(r.matricola||'')}">`)}
+      ${fld('Valore (€)', `<input name="valore" type="number" step="0.01" inputmode="decimal" value="${r.valore!=null?r.valore:''}">`)}
+    </div>
+    <div class="frow">
+      ${fld('Marca', `<input name="marca" value="${esc(r.marca||'')}">`)}
+      ${fld('Custode', `<input name="custode" value="${esc(r.custode||'')}">`)}
+    </div>
+    ${fld('Note', `<textarea name="note" rows="2">${esc(r.note||'')}</textarea>`)}
+    <div class="sh-actions">
+      <button type="submit" class="save">${isNew?'Crea risorsa':'Salva'}</button>
+      ${isNew?'':`<button type="button" class="del" onclick="eliminaRisorsa('${esc(r.id)}')">Elimina</button>`}
+    </div></form>`;
+  openSheet(isNew?'Nuova risorsa':'Modifica risorsa', body);
+  $('#frm-ris').addEventListener('submit', async ev=>{
+    ev.preventDefault();
+    const f=ev.target, g=n=>f.elements[n].value;
+    const cat=S.cat.find(c=>c.id===g('categoria_id'));
+    const payload={
+      nome:g('nome').trim(), categoria_id:g('categoria_id'), categoria: cat?cat.nome:null,
+      gestione:g('gestione'), qty_totale: g('gestione')==='univoca'?1:(Number(g('qty_totale'))||0),
+      unita:g('unita').trim()||'pz', deposito_base:g('deposito_base'),
+      matricola:g('matricola').trim()||null, valore: g('valore')!==''?Number(g('valore')):null,
+      marca:g('marca').trim()||null, custode:g('custode').trim()||null, note:g('note').trim()||null
+    };
+    try{
+      if(isNew){ payload.id=uid(); payload.attiva=true; payload.natura='durevole'; await apiSend('POST','risorse',[payload]); }
+      else{ await apiSend('PATCH','risorse?id=eq.'+encodeURIComponent(r.id), payload); }
+      await loadAll(); closeSheet(); render(); toast(isNew?'Risorsa creata ✓':'Salvato ✓');
+    }catch(e){ console.error(e); toast('Errore salvataggio'); }
+  });
+}
+async function eliminaRisorsa(id){
+  if(movDi(id).length){ if(!confirm('Questa risorsa ha movimenti registrati. Preferisci disattivarla invece di eliminarla.\n\nEliminare comunque?')) return; }
+  else if(!confirm('Eliminare la risorsa?')) return;
+  try{ await apiSend('DELETE','risorse?id=eq.'+encodeURIComponent(id)); await loadAll(); closeSheet(); render(); toast('Eliminata'); }
+  catch(e){ console.error(e); toast('Errore: potrebbe avere movimenti collegati'); }
+}
+window.nuovaRisorsa=nuovaRisorsa; window.modificaRisorsa=modificaRisorsa; window.eliminaRisorsa=eliminaRisorsa;
+
+/* ---------- movimento: uscita / trasferimento / rientro ---------- */
+function destOptions(){
+  // cantieri dal blob + depositi + mezzi + esterni
+  const groups=[];
+  if(S.cantieri.length) groups.push(['Cantieri', S.cantieri.map(c=>({v:'cantiere|'+c.id+'|'+c.nome, l:c.nome}))]);
+  groups.push(['Depositi', S.dep.map(d=>({v:'deposito|'+d.id+'|'+d.nome, l:d.nome}))]);
+  groups.push(['Mezzi', S.ubi.filter(u=>u.tipo==='mezzo').map(u=>({v:'mezzo|'+(u.rif_id||u.id)+'|'+u.nome, l:u.nome}))]);
+  groups.push(['Esterno', S.ubi.filter(u=>u.tipo==='esterno').map(u=>({v:'esterno|'+(u.rif_id||u.id)+'|'+u.nome, l:u.nome}))]);
+  return groups.map(g=>`<optgroup label="${g[0]}">${g[1].map(o=>`<option value="${esc(o.v)}">${esc(o.l)}</option>`).join('')}</optgroup>`).join('');
+}
+function nuovoMovimento(tipo, preRis){
+  tipo=tipo||'uscita';
+  if(tipo==='rientro') return formRientro();
+  const risOpts=S.ris.filter(r=>r.gestione!=='consumabile').sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  const titolo = tipo==='trasferimento'?'Trasferimento':'Uscita dal deposito';
+  const body=`<form id="frm-mov">
+    ${fld('Risorsa', `<select name="ris" required>${risOpts.map(r=>`<option value="${esc(r.id)}" ${r.id===preRis?'selected':''}>${esc(r.nome)}${r.gestione==='univoca'?' · attrezzo':''}</option>`).join('')}</select>`)}
+    ${fld('Quantità', `<input name="qty" type="number" step="1" min="1" inputmode="numeric" value="1" required>`)}
+    <div id="disp-hint" class="hint"></div>
+    ${tipo==='trasferimento'?fld('Da (dove si trova ora)', `<select name="da" required>${destOptions()}</select>`):''}
+    ${fld('Destinazione', `<select name="dest" required>${destOptions()}</select>`)}
+    <div class="frow">
+      ${fld('Data uscita', `<input name="d1" type="date" value="${todayISO()}" required>`)}
+      ${fld('Rientro previsto', `<input name="d2" type="date">`)}
+    </div>
+    ${fld('Note', `<input name="note" placeholder="opzionale">`)}
+    <div class="sh-actions"><button type="submit" class="save">Registra ${tipo==='trasferimento'?'trasferimento':'uscita'}</button></div>
+  </form>`;
+  openSheet(titolo, body);
+  const f=$('#frm-mov');
+  function checkDisp(){
+    const r=risById(f.elements['ris'].value); if(!r){ $('#disp-hint').textContent=''; return; }
+    const d1=f.elements['d1'].value, d2=f.elements['d2'].value||d1;
+    if(r.gestione==='univoca'){ $('#disp-hint').innerHTML=''; return; }
+    const disp=disponibilita(r,d1,d2); const q=Number(f.elements['qty'].value)||0;
+    const el=$('#disp-hint');
+    if(q>disp){ el.className='hint bad'; el.textContent=`⚠️ Disponibili solo ${num(disp)} ${r.unita} in questo periodo (richiesti ${q}).`; }
+    else{ el.className='hint ok'; el.textContent=`Disponibili ${num(disp)} ${r.unita} in questo periodo.`; }
+  }
+  ['ris','qty','d1','d2'].forEach(n=> f.elements[n]&&f.elements[n].addEventListener('input',checkDisp));
+  checkDisp();
+  f.addEventListener('submit', async ev=>{
+    ev.preventDefault();
+    const r=risById(f.elements['ris'].value); if(!r) return;
+    const dp=(f.elements['dest'].value||'').split('|'); const aTipo=dp[0], aId=dp[1], aNome=dp.slice(2).join('|');
+    let daTipo='deposito', daId=r.deposito_base, daNome=depNome(r.deposito_base);
+    if(tipo==='trasferimento'){ const p=(f.elements['da'].value||'').split('|'); daTipo=p[0]; daId=p[1]; daNome=p.slice(2).join('|'); }
+    const d1=f.elements['d1'].value, d2=f.elements['d2'].value||null;
+    const stato = d1>todayISO() ? 'programmata' : 'in_corso';
+    const row={
+      risorsa_id:r.id, qty:Number(f.elements['qty'].value)||1,
+      deposito_id: r.deposito_base||null,
+      cantiere_id: aTipo==='cantiere'?aId:null, cantiere_nome: aTipo==='cantiere'?aNome:null,
+      data_uscita:d1, data_rientro:d2, stato,
+      da_tipo:daTipo, da_id:daId, da_nome:daNome, a_tipo:aTipo, a_id:aId, a_nome:aNome,
+      origine:'app_risorse', note:f.elements['note'].value.trim()||null
+    };
+    try{ await apiSend('POST','allocazioni',[row]); await loadAll(); closeSheet(); render(); toast('Movimento registrato ✓'); }
+    catch(e){ console.error(e); toast('Errore registrazione'); }
+  });
+}
+function formRientro(){
+  const aperti=movFuoriTuttiOggi().concat(movInRitardo()).filter((m,i,a)=>a.indexOf(m)===i);
+  if(!aperti.length){ openSheet('Rientro', `<div class="empty">Nessun movimento aperto da far rientrare.</div>`); return; }
+  const body=`<form id="frm-in">
+    ${fld('Movimento da chiudere', `<select name="mov" required>${aperti.sort((a,b)=>(a.data_rientro||'').localeCompare(b.data_rientro||'')).map(m=>{const r=risById(m.risorsa_id);return `<option value="${m.id}">${esc(r?r.nome:'?')} · ${num(m.qty)} · ${esc(m.a_nome||'')}</option>`;}).join('')}</select>`)}
+    ${fld('Data rientro effettivo', `<input name="dr" type="date" value="${todayISO()}" required>`)}
+    ${fld('Rientra in', `<select name="dove">${S.dep.map(d=>`<option value="${d.id}|${esc(d.nome)}">${esc(d.nome)}</option>`).join('')}</select>`)}
+    <div class="sh-actions"><button type="submit" class="save">Registra rientro</button></div></form>`;
+  openSheet('Rientro in deposito', body);
+  $('#frm-in').addEventListener('submit', async ev=>{
+    ev.preventDefault(); const f=ev.target;
+    const id=f.elements['mov'].value; const dr=f.elements['dr'].value;
+    try{ await apiSend('PATCH','allocazioni?id=eq.'+id, {data_rientro_effettiva:dr, data_rientro: dr, stato:'rientrata'}); await loadAll(); closeSheet(); render(); toast('Rientro registrato ✓'); }
+    catch(e){ console.error(e); toast('Errore rientro'); }
+  });
+}
+async function rientroRapido(id){
+  const m=S.mov.find(x=>x.id===id); if(!m) return;
+  const r=risById(m.risorsa_id);
+  if(!confirm(`Registrare il rientro di "${r?r.nome:'?'}" (${num(m.qty)}) oggi?`)) return;
+  try{ await apiSend('PATCH','allocazioni?id=eq.'+id, {data_rientro_effettiva:todayISO(), data_rientro:todayISO(), stato:'rientrata'}); await loadAll(); render(); const h=$('#sheet-host'); if(h&&h.innerHTML) apriRisorsa(m.risorsa_id); toast('Rientro registrato ✓'); }
+  catch(e){ console.error(e); toast('Errore rientro'); }
+}
+window.nuovoMovimento=nuovoMovimento; window.rientroRapido=rientroRapido;
+
+/* ---------- depositi / ubicazioni ---------- */
+function nuovoDeposito(){
+  const body=`<form id="frm-dep">${fld('Nome deposito',`<input name="nome" required>`)}${fld('Note',`<input name="note">`)}
+    <div class="sh-actions"><button type="submit" class="save">Crea deposito</button></div></form>`;
+  openSheet('Nuovo deposito', body);
+  $('#frm-dep').addEventListener('submit', async ev=>{ ev.preventDefault(); const f=ev.target;
+    const id='dep_'+uid(); const nome=f.elements['nome'].value.trim();
+    try{ await apiSend('POST','depositi',[{id,nome,tipo:'deposito',note:f.elements['note'].value.trim()||null}]);
+      await apiSend('POST','ubicazioni',[{id,nome,tipo:'deposito',rif_id:id}]);
+      await loadAll(); closeSheet(); render(); toast('Deposito creato ✓'); }
+    catch(e){ console.error(e); toast('Errore'); } });
+}
+function nuovoMezzo(){
+  const body=`<form id="frm-mz">${fld('Nome / targa',`<input name="nome" required placeholder="es. GB649YN">`)}
+    ${fld('Tipo',`<select name="tipo"><option value="mezzo">Mezzo</option><option value="esterno">Esterno / terzi</option></select>`)}
+    <div class="sh-actions"><button type="submit" class="save">Aggiungi</button></div></form>`;
+  openSheet('Nuova ubicazione', body);
+  $('#frm-mz').addEventListener('submit', async ev=>{ ev.preventDefault(); const f=ev.target;
+    const nome=f.elements['nome'].value.trim(); const tipo=f.elements['tipo'].value;
+    const id=tipo+'_'+nome.replace(/[^A-Za-z0-9]/g,'')||tipo+'_'+uid();
+    try{ await apiSend('POST','ubicazioni',[{id,nome,tipo,rif_id:nome}]); await loadAll(); closeSheet(); render(); toast('Aggiunto ✓'); }
+    catch(e){ console.error(e); toast('Errore'); } });
+}
+window.nuovoDeposito=nuovoDeposito; window.nuovoMezzo=nuovoMezzo;
+
+/* =====================================================================
+   INIT
+   ===================================================================== */
+async function init(){
+  shell();
+  $('#content').innerHTML = `<div class="loading"><div class="sp">⚙️</div><p>Carico il parco…</p></div>`;
+  try{ await loadAll(); render(); }
+  catch(e){ console.error(e); $('#content').innerHTML = `<div class="empty" style="margin-top:40px">Errore di caricamento.<br><small>${esc(String(e.message||e))}</small><br><br><button class="add" onclick="init()">Riprova</button></div>`; }
+}
+window.init=init;
+if('serviceWorker' in navigator){ try{ navigator.serviceWorker.register('sw.js?v=1'); }catch(e){} }
+if(getSess81()) init();
+function getSess81(){ try{ const s=JSON.parse((localStorage.getItem('sb81_sess')||sessionStorage.getItem('sb81_sess'))||'null'); return s&&s.access_token; }catch(e){ return false; } }
+</script>
+
+<style>
+:root{
+  --bg:#eef1f5; --surface:#ffffff; --surface2:#f6f8fb;
+  --ink:#16202e; --muted:#5b6774; --faint:#8a95a3; --line:#e2e7ee;
+  --brand:#155e75; --brand-d:#104c5e; --brand-soft:rgba(21,94,117,.10);
+  --amber:#b45309; --amber-soft:rgba(180,83,9,.12);
+  --green:#2f8f5f; --green-soft:rgba(47,143,95,.12);
+  --red:#c0392f; --red-soft:rgba(192,57,47,.12);
+  --gold:#a9781a;
+  --sans:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  --r:12px; --sh:0 1px 2px rgba(16,32,46,.05),0 6px 18px -12px rgba(16,32,46,.18);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden;-webkit-font-smoothing:antialiased}
+#app-root{display:flex;flex-direction:column;height:100dvh}
+#hdr{background:var(--surface);padding:calc(env(safe-area-inset-top)+14px) 16px 12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);flex-shrink:0}
+.brand{display:flex;flex-direction:column;line-height:1.1}
+.brand .logo{font-size:18px;font-weight:800;color:var(--brand);letter-spacing:.5px}
+.brand .sub{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.03em}
+.sync{width:40px;height:40px;border-radius:10px;border:1px solid var(--brand-soft);background:var(--brand-soft);color:var(--brand);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0}
+.sync.spin{animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px calc(env(safe-area-inset-bottom)+90px)}
+#nav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:10}
+.nb{flex:1;padding:9px 4px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:transparent;color:var(--muted);font-size:10.5px;font-weight:600;letter-spacing:.02em;cursor:pointer;min-height:52px}
+.nb .ni{font-size:20px;filter:grayscale(.3);opacity:.7}
+.nb.on{color:var(--brand)} .nb.on .ni{filter:none;opacity:1}
+.pg{display:flex;flex-direction:column}
+/* kpi */
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;box-shadow:var(--sh)}
+.kpi.warn{border-color:var(--amber);background:var(--amber-soft)}
+.kpi .kn{font-family:var(--mono);font-size:24px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1}
+.kpi .kl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:5px;font-weight:600}
+.kpi .ks{font-size:11px;color:var(--faint);margin-top:3px}
+/* sezioni + liste */
+.sec-lbl{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:20px 2px 8px;display:flex;align-items:center;gap:8px}
+.sec-lbl.warn-lbl{color:var(--amber)}
+.sec-lbl .cnt,.cnt{font-family:var(--mono);font-size:11px;color:var(--faint);font-weight:600}
+.list{display:flex;flex-direction:column;gap:8px}
+.row{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:10px;box-shadow:var(--sh);cursor:pointer}
+.row-main{flex:1;min-width:0}
+.row-t{font-size:14.5px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.row-s{font-size:12px;color:var(--muted);margin-top:2px}
+.row-r{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.chev{color:var(--faint);font-size:20px}
+.mr-luogo{color:var(--brand);font-weight:600}
+.grp{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r);padding:8px;display:flex;flex-direction:column;gap:6px}
+.grp-h{font-size:13px;font-weight:700;color:var(--ink);padding:4px 6px;display:flex;align-items:center;gap:8px}
+.grp .row{box-shadow:none;border-color:var(--line)}
+.badge{font-family:var(--mono);font-size:11px;font-weight:700;background:var(--brand-soft);color:var(--brand);border-radius:20px;padding:1px 8px}
+.pill{font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:var(--surface2);border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.red{background:var(--red-soft);color:var(--red);border-color:transparent}
+.pill.amber{background:var(--amber-soft);color:var(--amber);border-color:transparent}
+.tag{font-size:10px;font-weight:700;color:var(--brand);background:var(--brand-soft);border-radius:5px;padding:1px 6px;letter-spacing:.03em}
+.tag.grey{color:var(--faint);background:var(--surface2);border:1px solid var(--line)}
+.mini{border:1px solid var(--brand);background:var(--surface);color:var(--brand);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.empty{text-align:center;color:var(--faint);font-size:13px;padding:24px 10px;background:var(--surface2);border:1px dashed var(--line);border-radius:var(--r)}
+.loading{text-align:center;color:var(--muted);padding:60px 0}
+.loading .sp{font-size:32px;animation:sp 1.4s linear infinite;display:inline-block}
+/* toolbar / chips / search */
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.toolbar .th{flex:1;font-size:16px;font-weight:700}
+.search{flex:1;padding:11px 13px;border:1px solid var(--line);border-radius:10px;font-size:15px;font-family:var(--sans);background:var(--surface)}
+.search:focus{outline:2px solid var(--brand);border-color:var(--brand)}
+.add{border:none;background:var(--brand);color:#fff;border-radius:10px;padding:11px 14px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap}
+.add.ghost{background:var(--surface);color:var(--brand);border:1px solid var(--brand)}
+.add.wide{width:100%}
+.chips{display:flex;gap:7px;overflow-x:auto;padding-bottom:4px;margin-bottom:4px}
+.chip{border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:20px;padding:7px 13px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.chip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+/* movimenti actions */
+.actions3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:6px}
+.act{display:flex;flex-direction:column;align-items:center;gap:5px;padding:15px 6px;border-radius:var(--r);border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:700;color:var(--ink);cursor:pointer;box-shadow:var(--sh)}
+.act span{font-size:24px}
+.act.out{border-color:var(--amber);color:var(--amber)}
+.act.in{border-color:var(--green);color:var(--green)}
+.act.trf{border-color:var(--brand);color:var(--brand)}
+/* dettaglio */
+.dett-head{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.dett-ic{font-size:30px;width:52px;height:52px;display:flex;align-items:center;justify-content:center;background:var(--brand-soft);border-radius:14px;flex-shrink:0}
+.dett-t{font-size:17px;font-weight:700}
+.dett-s{font-size:12.5px;color:var(--muted);margin-top:2px}
+.dett-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px}
+.dg{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:8px 11px;font-size:12px}
+.dg span{display:block;color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em}
+.dg b{font-size:14px;color:var(--ink)}
+.dett-foot{display:flex;gap:8px;margin-top:16px}
+.dett-foot .add{flex:1;text-align:center}
+/* timeline */
+.timeline{position:relative;padding-left:6px}
+.tl{display:flex;gap:12px;padding:2px 0 14px;position:relative}
+.tl:not(:last-child)::before{content:'';position:absolute;left:5px;top:14px;bottom:0;width:2px;background:var(--line)}
+.tl-dot{width:12px;height:12px;border-radius:50%;background:var(--surface);border:2px solid var(--faint);margin-top:3px;flex-shrink:0;z-index:1}
+.tl.open .tl-dot{border-color:var(--amber);background:var(--amber)}
+.tl-body{flex:1}
+.tl-r{font-size:13.5px}
+.tl-s{font-size:12px;color:var(--muted);margin-top:2px}
+.tl-s .st{font-weight:600;color:var(--ink)}
+.tl .mini{margin-top:8px}
+/* form / sheet */
+.ov{position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--surface);border-radius:18px 18px 0 0;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;transform:translateY(30px);transition:transform .22s;padding-bottom:calc(env(safe-area-inset-bottom)+16px)}
+.sheet.up{transform:translateY(0)}
+.sh-h{position:sticky;top:0;background:var(--surface);display:flex;align-items:center;justify-content:space-between;padding:16px 18px 10px;border-bottom:1px solid var(--line);z-index:2}
+.sh-t{font-size:16px;font-weight:700}
+.sh-x{border:none;background:var(--surface2);width:32px;height:32px;border-radius:50%;font-size:15px;color:var(--muted);cursor:pointer}
+.sh-b{padding:16px 18px}
+.fld{display:block;margin-bottom:12px}
+.fld>span{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px}
+.fld input,.fld select,.fld textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;font-family:var(--sans);background:var(--surface);color:var(--ink)}
+.fld input:focus,.fld select:focus,.fld textarea:focus{outline:2px solid var(--brand);border-color:var(--brand)}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hint{font-size:12px;margin:-6px 0 12px;padding:7px 10px;border-radius:8px}
+.hint.ok{color:var(--green);background:var(--green-soft)}
+.hint.bad{color:var(--amber);background:var(--amber-soft);font-weight:600}
+.sh-actions{display:flex;gap:10px;margin-top:6px}
+.save{flex:1;border:none;background:var(--brand);color:#fff;border-radius:11px;padding:14px;font-size:15px;font-weight:700;cursor:pointer}
+.save:active{background:var(--brand-d)}
+.del{border:1px solid var(--red);background:var(--surface);color:var(--red);border-radius:11px;padding:14px 16px;font-weight:700;cursor:pointer}
+/* toast */
+#toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom)+80px);transform:translateX(-50%) translateY(20px);background:var(--brand);color:#fff;padding:11px 20px;border-radius:12px;font-weight:700;font-size:13.5px;opacity:0;transition:all .25s;z-index:2000;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.25);white-space:nowrap}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</body>
+</html>
