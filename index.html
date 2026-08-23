@@ -264,6 +264,13 @@ async function loadAll(){
     const dati = g && g[0] && g[0].dati || {};
     S.cantieri = (dati.cantieri||[]).map(c=>({id:c.id, nome:c.nome||c.name||c.cantiere||'(senza nome)', stato:c.stato}));
   }catch(e){ S.cantieri=[]; console.warn('cantieri non caricati', e); }
+  // Normalizza i movimenti scritti da app che non compilano a_/da_ (es. Planning):
+  // ricava destinazione e provenienza dai campi storici cantiere_id/deposito_id.
+  S.mov.forEach(m=>{
+    if(!m.a_tipo){ if(m.cantiere_id){ m.a_tipo='cantiere'; m.a_id=m.a_id||m.cantiere_id; m.a_nome=m.a_nome||m.cantiere_nome; }
+      else { m.a_tipo='deposito'; m.a_id=m.a_id||m.deposito_id; m.a_nome=m.a_nome||depNome(m.deposito_id); } }
+    if(!m.da_tipo){ m.da_tipo='deposito'; m.da_id=m.da_id||m.deposito_id; m.da_nome=m.da_nome||depNome(m.deposito_id); }
+  });
   S.loaded=true;
 }
 
@@ -273,7 +280,7 @@ function catLabel(r){ const c=catById(r.categoria_id); if(c) return (c.icona? c.
 function catIcona(r){ const c=catById(r.categoria_id); return c&&c.icona ? c.icona : '📦'; }
 function risById(id){ return S.ris.find(r=>r.id===id); }
 function movDi(rid){ return S.mov.filter(m=>m.risorsa_id===rid); }
-function isAperto(m){ return m.stato!=='rientrata' && !m.data_rientro_effettiva; }
+function isAperto(m){ return !['rientrata','trasferita','annullata'].includes(m.stato) && !m.data_rientro_effettiva; }
 function isFuori(m){ return m.a_tipo && m.a_tipo!=='deposito'; }   // destinazione non-deposito = fuori
 // movimenti attivi OGGI (già usciti, non ancora rientrati) e fuori dal deposito
 function movFuoriOggi(rid, t){ t=t||todayISO();
