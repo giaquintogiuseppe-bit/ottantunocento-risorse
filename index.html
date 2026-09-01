@@ -262,7 +262,8 @@ async function loadAll(){
   try{
     const g = await apiGet('gestionale_dati?select=dati&limit=1');
     const dati = g && g[0] && g[0].dati || {};
-    S.cantieri = (dati.cantieri||[]).map(c=>({id:c.id, nome:c.nome||c.name||c.cantiere||'(senza nome)', stato:c.stato}));
+    const arch = new Set(dati._cantieriArchiviati||[]);
+    S.cantieri = (dati.cantieri||[]).map(c=>({id:c.id, nome:c.nome||c.name||c.cantiere||'(senza nome)', stato:c.stato, tipo:c.tipo, arch:arch.has(c.id)}));
   }catch(e){ S.cantieri=[]; console.warn('cantieri non caricati', e); }
   // Normalizza i movimenti scritti da app che non compilano a_/da_ (es. Planning):
   // ricava destinazione e provenienza dai campi storici cantiere_id/deposito_id.
@@ -645,10 +646,19 @@ async function eliminaRisorsa(id){
 window.nuovaRisorsa=nuovaRisorsa; window.modificaRisorsa=modificaRisorsa; window.eliminaRisorsa=eliminaRisorsa;
 
 /* ---------- movimento: uscita / trasferimento / rientro ---------- */
+// Cantieri ordinati "attivi prima" (operativi -> lungo periodo -> conclusi/persi),
+// esclusi gli archiviati. Riduce la sfilza nel menu Destinazione.
+function _cantieriOrdinati(){
+  const isConcl=c=>{const s=(c.stato||'').toLowerCase();return s.includes('conclus')||s.includes('pers');};
+  const rank=c=>isConcl(c)?2:(c.tipo==='lungo_periodo'?1:0);
+  return S.cantieri.filter(c=>!c.arch)
+    .slice().sort((a,b)=>rank(a)-rank(b)||(a.nome||'').localeCompare(b.nome||''));
+}
 function destOptions(){
   // cantieri dal blob + depositi + mezzi + esterni
   const groups=[];
-  if(S.cantieri.length) groups.push(['Cantieri', S.cantieri.map(c=>({v:'cantiere|'+c.id+'|'+c.nome, l:c.nome}))]);
+  const cant=_cantieriOrdinati();
+  if(cant.length) groups.push(['Cantieri', cant.map(c=>({v:'cantiere|'+c.id+'|'+c.nome, l:c.nome}))]);
   groups.push(['Depositi', S.dep.map(d=>({v:'deposito|'+d.id+'|'+d.nome, l:d.nome}))]);
   groups.push(['Mezzi', S.ubi.filter(u=>u.tipo==='mezzo').map(u=>({v:'mezzo|'+(u.rif_id||u.id)+'|'+u.nome, l:u.nome}))]);
   groups.push(['Esterno', S.ubi.filter(u=>u.tipo==='esterno').map(u=>({v:'esterno|'+(u.rif_id||u.id)+'|'+u.nome, l:u.nome}))]);
@@ -701,7 +711,24 @@ function nuovoMovimento(tipo, preRis){
       da_tipo:daTipo, da_id:daId, da_nome:daNome, a_tipo:aTipo, a_id:aId, a_nome:aNome,
       origine:'app_risorse', note:f.elements['note'].value.trim()||null
     };
-    try{ await apiSend('POST','allocazioni',[row]); await loadAll(); closeSheet(); render(); toast('Movimento registrato ✓'); }
+    try{
+      // Trasferimento da una posizione NON-deposito: storna le allocazioni aperte
+      // che si trovano su "da" (FIFO), così la risorsa non risulta in due posti.
+      // Stessa semantica del Planning (movTrasferimento → stato 'trasferita').
+      if(tipo==='trasferimento' && daTipo!=='deposito'){
+        let resto=row.qty;
+        const fonti=movDi(r.id)
+          .filter(m=> isAperto(m) && isFuori(m) && (m.a_id===daId || m.a_nome===daNome))
+          .sort((a,b)=>(a.data_uscita||'').localeCompare(b.data_uscita||''));
+        for(const m of fonti){
+          if(resto<=0) break;
+          const mq=Number(m.qty)||0;
+          if(mq<=resto){ await apiSend('PATCH','allocazioni?id=eq.'+m.id,{stato:'trasferita', data_rientro:d1, data_rientro_effettiva:d1}); resto-=mq; }
+          else { await apiSend('PATCH','allocazioni?id=eq.'+m.id,{qty:mq-resto}); resto=0; }
+        }
+      }
+      await apiSend('POST','allocazioni',[row]); await loadAll(); closeSheet(); render(); toast('Movimento registrato ✓');
+    }
     catch(e){ console.error(e); toast('Errore registrazione'); }
   });
 }
@@ -755,11 +782,41 @@ function nuovoMezzo(){
 }
 window.nuovoDeposito=nuovoDeposito; window.nuovoMezzo=nuovoMezzo;
 
+/* ---------- stop autofill contatti del telefono (rubrica) ---------- */
+// I form nascono dinamicamente nelle sheet: un MutationObserver spegne
+// l'autofill su ogni campo di testo appena compare (nome risorsa, marca,
+// custode, targa mezzo, ecc.), così la rubrica non copre i campi.
+function _killAutofill(root){
+  const NO=['date','time','number','checkbox','radio','file','range','color','password','hidden'];
+  (root||document).querySelectorAll('input').forEach(el=>{
+    if(el.dataset.afDone) return;
+    const t=(el.getAttribute('type')||'text').toLowerCase();
+    if(NO.includes(t)) return;
+    el.setAttribute('autocomplete','off');
+    el.setAttribute('autocorrect','off');
+    el.setAttribute('spellcheck','false');
+    el.dataset.afDone='1';
+  });
+}
+function _startAutofillGuard(){
+  _killAutofill(document);
+  try{
+    new MutationObserver(ms=>{
+      for(const m of ms) for(const n of m.addedNodes){
+        if(n.nodeType!==1) continue;
+        if(n.matches&&n.matches('input')) _killAutofill(n.parentNode||document);
+        else if(n.querySelector&&n.querySelector('input')) _killAutofill(n);
+      }
+    }).observe(document.body,{childList:true,subtree:true});
+  }catch(e){}
+}
+
 /* =====================================================================
    INIT
    ===================================================================== */
 async function init(){
   shell();
+  _startAutofillGuard();
   $('#content').innerHTML = `<div class="loading"><div class="sp">⚙️</div><p>Carico il parco…</p></div>`;
   try{ await loadAll(); render(); }
   catch(e){ console.error(e); $('#content').innerHTML = `<div class="empty" style="margin-top:40px">Errore di caricamento.<br><small>${esc(String(e.message||e))}</small><br><br><button class="add" onclick="init()">Riprova</button></div>`; }
