@@ -519,20 +519,22 @@ function viewMov(){
 function viewDep(){
   const t=todayISO();
   let html=`<div class="pg">
-    <div class="toolbar"><div class="th">Depositi &amp; ubicazioni</div><button class="add" onclick="nuovoDeposito()">＋ Deposito</button></div>`;
-  // depositi
+    <div class="toolbar" style="justify-content:flex-end"><button class="add" onclick="nuovoDeposito()">＋ Deposito</button></div>`;
+  // depositi (tocca per vedere le risorse con base lì)
+  html+=`<div class="sec-lbl">🏠 Depositi <span class="cnt">${S.dep.length}</span></div><div class="list">`;
   S.dep.forEach(d=>{
     const dentro = S.ris.filter(r=>r.deposito_base===d.id).length;
-    html+=`<div class="sec-lbl">🏠 ${esc(d.nome)}</div><div class="list"><div class="row"><div class="row-main"><div class="row-s">${dentro} risorse con base qui</div></div></div></div>`;
+    html+=`<div class="row" onclick="apriDeposito('${esc(d.id)}')"><div class="row-main"><div class="row-t">🏠 ${esc(d.nome)}</div><div class="row-s">${dentro} risorse con base qui</div></div><div class="row-r"><span class="chev">›</span></div></div>`;
   });
+  html+=`</div>`;
   // mezzi (ubicazioni tipo mezzo) — cosa c'è su ciascuno adesso
   const mezzi=S.ubi.filter(u=>u.tipo==='mezzo');
   html+=`<div class="sec-lbl">🚐 Mezzi — cosa trasportano ora</div><div class="list">`;
   mezzi.forEach(u=>{
     const sopra=S.mov.filter(m=> isAperto(m) && m.a_tipo==='mezzo' && (m.a_id===u.rif_id||m.a_nome===u.nome) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t));
-    html+=`<div class="row"><div class="row-main"><div class="row-t">${esc(u.nome)}</div>
+    html+=`<div class="row" onclick="apriMezzo('${esc(u.id)}')"><div class="row-main"><div class="row-t">🚐 ${esc(u.nome)}</div>
       <div class="row-s">${sopra.length? sopra.map(m=>esc((risById(m.risorsa_id)||{}).nome||'?')).join(', ') : 'vuoto'}</div></div>
-      <div class="row-r"><span class="badge">${sopra.length}</span></div></div>`;
+      <div class="row-r"><span class="badge">${sopra.length}</span><span class="chev">›</span></div></div>`;
   });
   html+=`</div>`;
   // esterni
@@ -603,6 +605,34 @@ window.closeSheet=closeSheet; window.apriRisorsa=apriRisorsa;
 function goTab(t){ TAB=t; render(); }
 function goParco(f){ PARCO_FILTRO=f||'tutti'; PARCO_Q=''; TAB='parco'; render(); }
 window.goTab=goTab; window.goParco=goParco;
+
+// Scheda deposito → elenco risorse con base lì (ognuna apre il dettaglio)
+function apriDeposito(id){
+  const d=S.dep.find(x=>x.id===id); if(!d) return;
+  const base=S.ris.filter(r=>r.deposito_base===id).sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  let body=`<div class="sec-lbl">📦 Risorse con base qui <span class="cnt">${base.length}</span></div>`;
+  if(!base.length){ body+=`<div class="empty">Nessuna risorsa con base in questo deposito.</div>`; }
+  else{
+    body+=`<div class="list">`+ base.map(r=>{
+      const pos=posizione(r);
+      const dove=pos.map(p=>`${p.tipo==='deposito'?'🏠':(p.tipo==='mezzo'?'🚐':'🏗️')} ${esc(p.luogo)}`).join(' · ');
+      return `<div class="row" onclick="closeSheet();apriRisorsa('${esc(r.id)}')"><div class="row-main"><div class="row-t">${catIcona(r)} ${esc(r.nome)}</div><div class="row-s">${r.gestione==='univoca'?'':'tot '+num(r.qty_totale)+' '+esc(r.unita)+' · '}${dove||'—'}</div></div><div class="row-r"><span class="chev">›</span></div></div>`;
+    }).join('')+`</div>`;
+  }
+  openSheet('🏠 '+esc(d.nome), body);
+}
+// Scheda mezzo → elenco di cosa trasporta ora (ognuna apre il dettaglio)
+function apriMezzo(id){
+  const u=S.ubi.find(x=>x.id===id); if(!u) return;
+  const t=todayISO(); const rif=u.rif_id||u.id;
+  const sopra=S.mov.filter(m=> isAperto(m) && m.a_tipo==='mezzo' && (m.a_id===rif||m.a_nome===u.nome) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t))
+    .sort((a,b)=>(a.data_uscita||'').localeCompare(b.data_uscita||''));
+  let body=`<div class="sec-lbl">🚐 A bordo adesso <span class="cnt">${sopra.length}</span></div>`;
+  if(!sopra.length){ body+=`<div class="empty">Mezzo vuoto: nessuna risorsa a bordo.</div>`; }
+  else{ body+=`<div class="list">`+ sopra.map(m=> rowMov(m, risById(m.risorsa_id), m.data_rientro&&m.data_rientro<t, true)).join('')+`</div>`; }
+  openSheet('🚐 '+esc(u.nome), body);
+}
+window.apriDeposito=apriDeposito; window.apriMezzo=apriMezzo;
 
 function fld(label, inner){ return `<label class="fld"><span>${label}</span>${inner}</label>`; }
 function optList(arr, sel){ return arr.map(o=>`<option value="${esc(o.v)}" ${o.v===sel?'selected':''}>${esc(o.l)}</option>`).join(''); }
