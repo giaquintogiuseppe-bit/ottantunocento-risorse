@@ -520,11 +520,21 @@ function viewDep(){
   const t=todayISO();
   let html=`<div class="pg">
     <div class="toolbar" style="justify-content:flex-end"><button class="add" onclick="nuovoDeposito()">＋ Deposito</button></div>`;
-  // depositi (tocca per vedere le risorse con base lì)
+  // depositi (tocca per vedere le risorse con base lì) — con evidenza doppioni + elimina
+  const _norm=s=>(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+  const _cnt={}; S.dep.forEach(d=>{ const k=_norm(d.nome); _cnt[k]=(_cnt[k]||0)+1; });
   html+=`<div class="sec-lbl">🏠 Depositi <span class="cnt">${S.dep.length}</span></div><div class="list">`;
   S.dep.forEach(d=>{
     const dentro = S.ris.filter(r=>r.deposito_base===d.id).length;
-    html+=`<div class="row" onclick="apriDeposito('${esc(d.id)}')"><div class="row-main"><div class="row-t">🏠 ${esc(d.nome)}</div><div class="row-s">${dentro} risorse con base qui</div></div><div class="row-r"><span class="chev">›</span></div></div>`;
+    const usato = S.mov.some(m=> m.deposito_id===d.id || m.da_id===d.id || m.a_id===d.id);
+    const dup = _cnt[_norm(d.nome)]>1;
+    const dupTag = dup ? ' <span style="font-size:9px;font-weight:800;color:var(--red);border:1px solid var(--red);border-radius:4px;padding:0 4px">DOPPIONE</span>' : '';
+    html+=`<div class="row" onclick="apriDeposito('${esc(d.id)}')" style="${dup?'border-color:var(--red)':''}">
+      <div class="row-main"><div class="row-t">🏠 ${esc(d.nome)}${dupTag}</div>
+        <div class="row-s">${dentro} risorse con base qui${usato?' · usato in movimenti':''}</div></div>
+      <div class="row-r">
+        <button onclick="event.stopPropagation();eliminaDeposito('${esc(d.id)}')" title="Elimina deposito" style="border:1px solid var(--line);background:var(--surface);color:${(dentro||usato)?'var(--faint)':'var(--red)'};border-radius:8px;padding:5px 9px;font-size:13px;cursor:pointer">🗑</button>
+        <span class="chev">›</span></div></div>`;
   });
   html+=`</div>`;
   // mezzi (ubicazioni tipo mezzo) — cosa c'è su ciascuno adesso
@@ -828,7 +838,27 @@ function nuovoMezzo(){
     try{ await apiSend('POST','ubicazioni',[{id,nome,tipo,rif_id:nome}]); await loadAll(); closeSheet(); render(); toast('Aggiunto ✓'); }
     catch(e){ console.error(e); toast('Errore'); } });
 }
-window.nuovoDeposito=nuovoDeposito; window.nuovoMezzo=nuovoMezzo;
+// Elimina un deposito (utile per i doppioni). Protetto: non elimina se ha
+// risorse con base lì o è usato nei movimenti (niente risorse orfane).
+async function eliminaDeposito(id){
+  const d=S.dep.find(x=>x.id===id); if(!d) return;
+  const dentro=S.ris.filter(r=>r.deposito_base===id).length;
+  const usato=S.mov.some(m=> m.deposito_id===id || m.da_id===id || m.a_id===id);
+  if(dentro||usato){
+    alert('Non posso eliminare "'+d.nome+'":\n'+
+      (dentro?('• '+dentro+' risorse hanno base qui\n'):'')+
+      (usato?'• è usato in movimenti\n':'')+
+      '\nSposta prima le risorse su un altro deposito (dal dettaglio della risorsa → Modifica → Deposito base) e riprova.');
+    return;
+  }
+  if(!confirm('Eliminare il deposito "'+d.nome+'"?\nNon ha risorse né movimenti collegati.')) return;
+  try{
+    await apiSend('DELETE','depositi?id=eq.'+encodeURIComponent(id));
+    try{ await apiSend('DELETE','ubicazioni?or=(id.eq.'+encodeURIComponent(id)+',rif_id.eq.'+encodeURIComponent(id)+')'); }catch(_){}
+    await loadAll(); render(); toast('Deposito eliminato ✓');
+  }catch(e){ console.error(e); toast('Errore eliminazione'); }
+}
+window.nuovoDeposito=nuovoDeposito; window.nuovoMezzo=nuovoMezzo; window.eliminaDeposito=eliminaDeposito;
 
 /* ---------- stop autofill contatti del telefono (rubrica) ---------- */
 // I form nascono dinamicamente nelle sheet: un MutationObserver spegne
