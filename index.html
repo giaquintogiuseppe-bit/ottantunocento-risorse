@@ -260,7 +260,10 @@ async function loadAll(){
   S.cat=cat; S.ubi=ubi; S.dep=dep; S.ris=ris; S.mov=mov;
   // cantieri dal blob del gestionale (solo lettura)
   try{
-    const g = await apiGet('gestionale_dati?select=dati&limit=1');
+    // Legge la riga LIVE del gestionale (id='unico'); senza filtro pescava
+    // per sbaglio 'roberto_staging' (0 cantieri) → menu Destinazione senza cantieri.
+    let g = await apiGet("gestionale_dati?id=eq.unico&select=dati&limit=1");
+    if(!(g && g[0] && g[0].dati)) g = await apiGet('gestionale_dati?select=dati&order=id.asc&limit=1');
     const dati = g && g[0] && g[0].dati || {};
     const arch = new Set(dati._cantieriArchiviati||[]);
     S.cantieri = (dati.cantieri||[]).map(c=>({id:c.id, nome:c.nome||c.name||c.cantiere||'(senza nome)', stato:c.stato, tipo:c.tipo, arch:arch.has(c.id)}));
