@@ -1,4 +1,4 @@
-const CACHE_NAME = 'otto8100-risorse-v8';
+const CACHE_NAME = 'otto8100-risorse-v9';
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(['./','./index.html']).catch(()=>{})));

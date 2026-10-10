@@ -286,9 +286,16 @@ function risById(id){ return S.ris.find(r=>r.id===id); }
 function movDi(rid){ return S.mov.filter(m=>m.risorsa_id===rid); }
 function isAperto(m){ return !['rientrata','trasferita','annullata'].includes(m.stato) && !m.data_rientro_effettiva; }
 function isFuori(m){ return m.a_tipo && m.a_tipo!=='deposito'; }   // destinazione non-deposito = fuori
+// Ordine arrivato da un preventivo e NON ancora preparato: impegna la disponibilità
+// ma fisicamente è ancora in deposito finché il magazzino non conferma l'uscita.
+function isDaPrepPrev(m){ return m.stato==='programmata' && m.origine==='preventivo'; }
+// Lista "Da preparare": ordini dai preventivi + uscite programmate future
+function movDaPreparare(){ const t=todayISO();
+  return S.mov.filter(m=> m.stato==='programmata' && isFuori(m) && !m.data_rientro_effettiva && (m.origine==='preventivo' || (m.data_uscita||'')>t));
+}
 // movimenti attivi OGGI (già usciti, non ancora rientrati) e fuori dal deposito
 function movFuoriOggi(rid, t){ t=t||todayISO();
-  return movDi(rid).filter(m=> isAperto(m) && isFuori(m) && m.data_uscita<=t && (!m.data_rientro || m.data_rientro>=t) );
+  return movDi(rid).filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita<=t && (!m.data_rientro || m.data_rientro>=t) );
 }
 function qtyFuoriOggi(rid,t){ return movFuoriOggi(rid,t).reduce((s,m)=>s+(Number(m.qty)||0),0); }
 // posizione attuale: array {luogo, tipo, qty}
@@ -306,13 +313,13 @@ function posizione(r, t){ t=t||todayISO();
 }
 // rientri in ritardo (previsto < oggi, non rientrato)
 function movInRitardo(){ const t=todayISO();
-  return S.mov.filter(m=> isAperto(m) && isFuori(m) && m.data_rientro && m.data_rientro<t );
+  return S.mov.filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_rientro && m.data_rientro<t );
 }
 function movProgrammati(){ const t=todayISO();
-  return S.mov.filter(m=> isAperto(m) && isFuori(m) && m.data_uscita>t );
+  return S.mov.filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita>t );
 }
 function movFuoriTuttiOggi(){ const t=todayISO();
-  return S.mov.filter(m=> isAperto(m) && isFuori(m) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t) );
+  return S.mov.filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t) );
 }
 function depNome(id){ const d=S.dep.find(x=>x.id===id); if(d) return d.nome; const u=S.ubi.find(x=>x.id===id); return u? u.nome : id; }
 // disponibilità in un periodo [d1,d2]
@@ -335,6 +342,7 @@ function valoreParco(){
    ===================================================================== */
 const NAV = [
   {id:'dash',  ic:'📊', lb:'Panoramica', sub:'Cosa è fuori, rientri e valore del parco'},
+  {id:'prep',  ic:'📋', lb:'Da preparare', sub:'Ordini dai preventivi e uscite programmate: prepara il materiale e conferma l\'uscita'},
   {id:'parco', ic:'📦', lb:'Parco',      sub:'Anagrafica delle risorse per categoria'},
   {id:'mov',   ic:'↔️', lb:'Movimenti',  sub:'Uscite, rientri e trasferimenti'},
   {id:'dep',   ic:'🏬', lb:'Depositi',   sub:'Depositi, mezzi e ubicazioni'}
@@ -364,10 +372,13 @@ function shell(){
 async function reload(){ const b=$('#btn-sync'); if(b){b.classList.add('spin');} try{ await loadAll(); render(); toast('Aggiornato ✓'); }catch(e){ toast('Errore aggiornamento'); console.error(e);} finally{ if(b) b.classList.remove('spin'); } }
 function render(){
   $$('#sb .ni, #mnav .mni-item').forEach(b=> b.classList.toggle('on', b.dataset.tab===TAB));
+  const nPrep=movDaPreparare().length;
+  $$('#sb .ni[data-tab="prep"], #mnav .mni-item[data-tab="prep"]').forEach(b=>{ let bd=b.querySelector('.prep-bd'); if(!bd){ bd=document.createElement('span'); bd.className='prep-bd'; b.appendChild(bd); } bd.textContent=nPrep||''; bd.style.display=nPrep?'':'none'; });
   const c=$('#cnt'); if(!c) return;
   const meta=NAV.find(n=>n.id===TAB)||{};
   let inner='';
   if(TAB==='dash') inner=viewDash();
+  else if(TAB==='prep') inner=viewPrep();
   else if(TAB==='parco') inner=viewParco();
   else if(TAB==='mov') inner=viewMov();
   else if(TAB==='dep') inner=viewDep();
@@ -390,7 +401,10 @@ function viewDash(){
   const t=todayISO(); const d7=new Date(); d7.setDate(d7.getDate()+7); const t7=d7.toISOString().slice(0,10);
   const rientri7=fuori.filter(m=>m.data_rientro && m.data_rientro>=t && m.data_rientro<=t7);
 
+  const daPrep=movDaPreparare();
+  const prepScad=daPrep.filter(m=>(m.data_uscita||'')<=t).length;
   let html = `<div class="pg">
+    ${daPrep.length?`<div class="prep-banner tap" onclick="goTab('prep')">📋 <b>${daPrep.length}</b> attrezzature da preparare${prepScad?` · <span style="color:var(--red)">${prepScad} da far uscire oggi o in ritardo</span>`:''}<span style="margin-left:auto">apri ›</span></div>`:''}
     <div class="kpis">
       <div class="kpi tap" onclick="goParco('tutti')"><div class="kn">${nRis}</div><div class="kl">Risorse</div><div class="ks">${nUniv} attrezzi · apri il parco ›</div></div>
       <div class="kpi tap" onclick="goTab('mov')"><div class="kn">${fuori.length}</div><div class="kl">Fuori adesso</div><div class="ks">in cantiere / su mezzo ›</div></div>
@@ -446,6 +460,91 @@ function rowMov(m, r, ritardo, hideLuogo){
       <button class="mini" onclick="event.stopPropagation();rientroRapido(${m.id})">Rientro</button></div>
   </div>`;
 }
+
+/* =====================================================================
+   VIEW — Da preparare (ordini dai preventivi + uscite programmate)
+   ===================================================================== */
+function viewPrep(){
+  const t=todayISO();
+  const L=movDaPreparare();
+  if(!L.length) return `<div class="pg"><div class="empty">Niente da preparare. Gli ordini arrivano dai preventivi accettati con la commessa.</div></div>`;
+  const gr={};
+  L.forEach(m=>{ const k=(m.a_id||'')+'|'+(m.a_nome||'?'); (gr[k]=gr[k]||[]).push(m); });
+  const keys=Object.keys(gr).sort((a,b)=>{ const ua=gr[a].reduce((x,m)=>m.data_uscita<x?m.data_uscita:x,'9999'), ub=gr[b].reduce((x,m)=>m.data_uscita<x?m.data_uscita:x,'9999'); return ua.localeCompare(ub); });
+  _PREP_KEYS=keys;
+  let html=`<div class="pg">`;
+  keys.forEach(k=>{
+    const items=gr[k].sort((a,b)=>(a.data_uscita||'').localeCompare(b.data_uscita||''));
+    const nome=items[0].a_nome||'?';
+    const usc=items[0].data_uscita, rie=items.find(m=>m.data_rientro)?.data_rientro;
+    const prev=[...new Set(items.map(m=>((m.note||'').match(/PREV-\d{4}-\d+/)||[])[0]).filter(Boolean))];
+    const scad=usc<=t;
+    html+=`<div class="grp prep-grp">
+      <div class="grp-h">${items[0].a_tipo==='mezzo'?'🚐':'🏗️'} ${esc(nome)} <span class="badge">${items.length}</span>
+        <span class="pill ${usc<t?'red':scad?'amber':''}" style="margin-left:auto">${usc<t?'⚠ uscita prevista '+fmtD(usc):scad?'esce oggi':'uscita '+fmtD(usc)}</span></div>
+      <div class="prep-sub">${prev.length?'Da preventivo '+prev.map(esc).join(', ')+' · ':''}${rie?'rientro previsto '+fmtD(rie):'rientro aperto'}</div>`;
+    items.forEach(m=>{
+      const r=risById(m.risorsa_id); const q=Number(m.qty)||0;
+      const inDep=r?((Number(r.qty_totale)||0)-qtyFuoriOggi(r.id)):0;
+      const manca=r && r.gestione!=='univoca' && q>inDep+0.0001;
+      const avv=/⚠/.test(m.note||'');
+      html+=`<div class="row">
+        <div class="row-main" onclick="apriRisorsa('${esc(m.risorsa_id)}')"><div class="row-t">${esc(r?r.nome:'#'+m.risorsa_id)}</div>
+          <div class="row-s"><b>${num(q)} ${esc(r?r.unita||'pz':'pz')}</b>${manca?` · <span style="color:var(--red)">⚠ in deposito ora ${num(Math.max(0,inDep))}</span>`:(r&&r.gestione!=='univoca'?` · in deposito ${num(inDep)}`:'')}${avv&&!manca?' · <span style="color:var(--amber)">⚠ mancanza segnalata all\'ordine</span>':''}</div></div>
+        <div class="row-r"><button class="mini" onclick="formUscitaPrep(${m.id})">✓ Uscita</button></div>
+      </div>`;
+    });
+    html+=`<div style="display:flex;justify-content:flex-end;padding:6px 4px 2px"><button class="mini" style="background:var(--brand);color:#fff" onclick="uscitaTuttoPrep(${keys.indexOf(k)})">✓ Uscita di tutto (${items.length})</button></div></div>`;
+  });
+  html+=`<div class="prep-note">Confermando l'uscita il materiale risulta <b>fuori</b> sul cantiere (anche nel Planning). Se ne prepari meno del richiesto, la differenza resta da preparare.</div></div>`;
+  return html;
+}
+function formUscitaPrep(id){
+  const m=S.mov.find(x=>x.id===id); if(!m) return;
+  const r=risById(m.risorsa_id);
+  const body=`<form id="frm-prep">
+    <div class="prep-sub" style="margin-bottom:10px">${esc(r?r.nome:'?')} → <b>${esc(m.a_nome||'')}</b> · richiesti <b>${num(m.qty)} ${esc(r?r.unita||'pz':'pz')}</b></div>
+    ${fld('Quantità che esce', `<input name="qty" type="number" min="0" step="1" value="${Number(m.qty)||0}" required>`)}
+    ${fld('Data uscita', `<input name="d1" type="date" value="${todayISO()}" required>`)}
+    <div class="sh-actions"><button type="submit" class="save">✓ Conferma uscita</button></div>
+  </form>`;
+  openSheet('Conferma uscita', body);
+  $('#frm-prep').addEventListener('submit', async ev=>{
+    ev.preventDefault();
+    const q=Number(ev.target.elements['qty'].value)||0, d=ev.target.elements['d1'].value||todayISO();
+    if(q<=0){ toast('Quantità non valida'); return; }
+    await confermaUscitaPrep(m, q, d); closeSheet();
+  });
+}
+async function confermaUscitaPrep(m, q, d){
+  try{
+    const tot=Number(m.qty)||0;
+    if(q>=tot-0.0001){
+      await apiSend('PATCH','allocazioni?id=eq.'+m.id+'&stato=eq.programmata',{stato:'in_corso', data_uscita:d, aggiornato_il:new Date().toISOString()});
+    } else {
+      // uscita parziale: la differenza resta da preparare
+      await apiSend('PATCH','allocazioni?id=eq.'+m.id,{qty:tot-q, aggiornato_il:new Date().toISOString()});
+      const nuova={risorsa_id:m.risorsa_id, qty:q, deposito_id:m.deposito_id||null, cantiere_id:m.cantiere_id||null, cantiere_nome:m.cantiere_nome||null,
+        data_uscita:d, data_rientro:m.data_rientro||null, stato:'in_corso',
+        da_tipo:m.da_tipo||'deposito', da_id:m.da_id||null, da_nome:m.da_nome||null, a_tipo:m.a_tipo, a_id:m.a_id, a_nome:m.a_nome,
+        origine:m.origine||'app_risorse', note:((m.note||'')+' · uscita parziale').replace(/^ · /,'')};
+      await apiSend('POST','allocazioni',[nuova]);
+    }
+    await loadAll(); render(); toast('Uscita confermata ✓');
+  }catch(e){ console.error(e); toast('Errore conferma uscita'); }
+}
+let _PREP_KEYS=[];
+async function uscitaTuttoPrep(i){
+  const k=_PREP_KEYS[i];
+  const items=movDaPreparare().filter(m=>((m.a_id||'')+'|'+(m.a_nome||'?'))===k);
+  if(!items.length) return;
+  if(!confirm(`Confermare l'uscita di ${items.length} attrezzature verso «${items[0].a_nome||''}» con data oggi?`)) return;
+  try{
+    for(const m of items) await apiSend('PATCH','allocazioni?id=eq.'+m.id+'&stato=eq.programmata',{stato:'in_corso', data_uscita:todayISO(), aggiornato_il:new Date().toISOString()});
+    await loadAll(); render(); toast('Uscita confermata ✓');
+  }catch(e){ console.error(e); toast('Errore conferma uscita'); }
+}
+window.formUscitaPrep=formUscitaPrep; window.uscitaTuttoPrep=uscitaTuttoPrep;
 
 /* =====================================================================
    VIEW — Parco (anagrafica)
@@ -978,6 +1077,12 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidd
 /* sezioni + liste */
 .sec-lbl{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:20px 2px 8px;display:flex;align-items:center;gap:8px}
 .sec-lbl.warn-lbl{color:var(--amber)}
+.prep-banner{display:flex;align-items:center;gap:8px;padding:11px 14px;margin-bottom:12px;border-radius:12px;background:var(--amber-soft);color:var(--ink);font-size:13px;cursor:pointer}
+.prep-grp{margin-bottom:14px}
+.prep-sub{font-size:11.5px;color:var(--muted);padding:0 6px 6px}
+.prep-note{font-size:11.5px;color:var(--muted);margin-top:10px;line-height:1.5}
+.prep-bd{display:inline-block;min-width:18px;padding:0 5px;margin-left:6px;border-radius:9px;background:var(--red);color:#fff;font-size:10.5px;font-weight:700;text-align:center;line-height:18px}
+#mnav .prep-bd{margin:0}
 .sec-lbl .cnt,.cnt{font-family:var(--mono);font-size:11px;color:var(--faint);font-weight:600}
 .list{display:flex;flex-direction:column;gap:8px}
 .row{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:10px;box-shadow:var(--sh);cursor:pointer}
