@@ -261,7 +261,9 @@ const $  = (s,r=document)=>r.querySelector(s);
 const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
 const esc = s => (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = ()=> Date.now().toString(36) + Math.random().toString(36).slice(2,7);
-function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// data in ora locale (toISOString usa l'UTC: tra mezzanotte e le 2 dava il giorno prima)
+function isoLocale(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function todayISO(){ return isoLocale(new Date()); }
 function fmtD(iso){ if(!iso) return '—'; const p=String(iso).slice(0,10).split('-'); return p.length===3? p[2]+'/'+p[1]+'/'+p[0].slice(2) : iso; }
 function fmtDlong(iso){ if(!iso) return '—'; const p=String(iso).slice(0,10).split('-'); return p.length===3? p[2]+'/'+p[1]+'/'+p[0] : iso; }
 function euro(n){ n=Number(n)||0; return '€ ' + n.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -274,13 +276,48 @@ async function apiGet(path){
   if(!r.ok) throw new Error('GET '+path+' → '+r.status+' '+(await r.text()));
   return r.json();
 }
-async function apiSend(method, path, body){
+// Testo d'errore leggibile da una risposta PostgREST non-2xx (campo `message` se c'è)
+async function _errResp(r, ctx){
+  const txt = await r.text().catch(()=> '');
+  let msg = '';
+  try{ const j = JSON.parse(txt); msg = j && (j.message || j.hint || j.details || j.error) || ''; }catch(_){ msg = txt; }
+  const e = new Error((msg || ('HTTP '+r.status)).toString().slice(0,300));
+  e.status = r.status; e.ctx = ctx; e.raw = txt;
+  return e;
+}
+// Messaggio breve per i toast
+function errMsg(e){ return String((e && e.message) || e || 'errore sconosciuto').slice(0,160); }
+// PATCH/DELETE: con return=representation PostgREST risponde [] se il filtro
+// (es. id=eq.X&stato=eq.programmata) non trova righe → lo trattiamo come errore,
+// altrimenti l'app direbbe "fatto" senza aver cambiato nulla.
+// opts.allowEmpty = true per le cancellazioni "di pulizia" dove 0 righe va bene.
+async function apiSend(method, path, body, opts){
+  opts = opts || {};
   const r = await fetch(REST+path, {
     method,
     headers:{'Content-Type':'application/json','Prefer':'return=representation'},
     body: body!=null ? JSON.stringify(body) : undefined
   });
-  if(!r.ok) throw new Error(method+' '+path+' → '+r.status+' '+(await r.text()));
+  if(!r.ok){ const e = await _errResp(r, method+' '+path); console.error(e.ctx, e.status, e.raw); throw e; }
+  const txt = await r.text();
+  const data = txt ? JSON.parse(txt) : null;
+  if((method==='PATCH' || method==='DELETE') && !opts.allowEmpty && Array.isArray(data) && !data.length){
+    const e = new Error('nessuna riga aggiornata (dato già modificato o non più presente: aggiorna e riprova)');
+    e.ctx = method+' '+path; throw e;
+  }
+  if(method==='POST' && Array.isArray(data) && !data.length){
+    const e = new Error('nessuna riga inserita'); e.ctx = method+' '+path; throw e;
+  }
+  return data;
+}
+// Chiamata a una funzione RPC (POST /rest/v1/rpc/<fn>)
+async function apiRpc(fn, args){
+  const r = await fetch(REST+'rpc/'+fn, {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Accept':'application/json'},
+    body: JSON.stringify(args||{})
+  });
+  if(!r.ok){ const e = await _errResp(r, 'RPC '+fn); console.error(e.ctx, e.status, e.raw); throw e; }
   const txt = await r.text();
   return txt ? JSON.parse(txt) : null;
 }
@@ -299,8 +336,8 @@ async function loadAll(){
   try{
     // Legge la riga LIVE del gestionale (id='unico'); senza filtro pescava
     // per sbaglio 'roberto_staging' (0 cantieri) → menu Destinazione senza cantieri.
-    let g = await apiGet("gestionale_dati?id=eq.unico&select=dati&limit=1");
-    if(!(g && g[0] && g[0].dati)) g = await apiGet('gestionale_dati?select=dati&order=id.asc&limit=1');
+    // Nessun fallback "prima riga qualsiasi": potrebbe essere 'roberto_staging'.
+    const g = await apiGet("gestionale_dati?id=eq.unico&select=dati&limit=1");
     const dati = g && g[0] && g[0].dati || {};
     const arch = new Set(dati._cantieriArchiviati||[]);
     S.cantieri = (dati.cantieri||[]).map(c=>({id:c.id, nome:c.nome||c.name||c.cantiere||'(senza nome)', stato:c.stato, tipo:c.tipo, arch:arch.has(c.id)}));
@@ -326,14 +363,19 @@ function isFuori(m){ return m.a_tipo && m.a_tipo!=='deposito'; }   // destinazio
 // Ordine arrivato da un preventivo e NON ancora preparato: impegna la disponibilità
 // ma fisicamente è ancora in deposito finché il magazzino non conferma l'uscita.
 function isDaPrepPrev(m){ return m.stato==='programmata' && m.origine==='preventivo'; }
-// Lista "Da preparare": ordini dai preventivi + uscite programmate future
+// Lista "Da preparare": ordini dai preventivi + uscite programmate future.
+// Esclusi i trasferimenti tra cantieri (da_tipo 'cantiere'): il materiale non passa dal deposito.
 function movDaPreparare(){ const t=todayISO();
-  return S.mov.filter(m=> m.stato==='programmata' && isFuori(m) && !m.data_rientro_effettiva && (m.origine==='preventivo' || (m.data_uscita||'')>t));
+  return S.mov.filter(m=> m.stato==='programmata' && isFuori(m) && m.da_tipo!=='cantiere' && !m.data_rientro_effettiva && (m.origine==='preventivo' || (m.data_uscita||'')>t));
 }
+// Regola unica allocazioni (uguale per tutte le app): un movimento APERTO occupa
+// da data_uscita finché non viene chiuso davvero, anche oltre il rientro previsto
+// (in quel caso è "in ritardo"); annullata non occupa mai.
 // movimenti attivi OGGI (già usciti, non ancora rientrati) e fuori dal deposito
 function movFuoriOggi(rid, t){ t=t||todayISO();
-  return movDi(rid).filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita<=t && (!m.data_rientro || m.data_rientro>=t) );
+  return movDi(rid).filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita<=t );
 }
+function isInRitardo(m, t){ t=t||todayISO(); return !!(m.data_rientro && m.data_rientro<t); }
 function qtyFuoriOggi(rid,t){ return movFuoriOggi(rid,t).reduce((s,m)=>s+(Number(m.qty)||0),0); }
 // posizione attuale: array {luogo, tipo, qty}
 function posizione(r, t){ t=t||todayISO();
@@ -355,8 +397,9 @@ function movInRitardo(){ const t=todayISO();
 function movProgrammati(){ const t=todayISO();
   return S.mov.filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita>t );
 }
+// tutto ciò che è fuori adesso, compresi i rientri scaduti (sono ancora fuori)
 function movFuoriTuttiOggi(){ const t=todayISO();
-  return S.mov.filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t) );
+  return S.mov.filter(m=> isAperto(m) && isFuori(m) && !isDaPrepPrev(m) && m.data_uscita<=t );
 }
 function depNome(id){ const d=S.dep.find(x=>x.id===id); if(d) return d.nome; const u=S.ubi.find(x=>x.id===id); return u? u.nome : id; }
 // disponibilità in un periodo [d1,d2]
@@ -365,7 +408,8 @@ function disponibilita(r, d1, d2){
   let impegnata = 0;
   movDi(r.id).forEach(m=>{
     if(!isAperto(m) || !isFuori(m)) return;
-    const a=m.data_uscita, b=m.data_rientro||'9999-12-31';
+    // aperto e già oltre il rientro previsto: resta impegnato finché non rientra
+    const a=m.data_uscita, b=(m.data_rientro && m.data_rientro>=todayISO()) ? m.data_rientro : '9999-12-31';
     if(a<=d2 && b>=d1) impegnata += Number(m.qty)||0;   // sovrapposizione
   });
   return tot - impegnata;
@@ -406,7 +450,7 @@ function shell(){
   $('#btn-sync').addEventListener('click', reload);
   $$('#sb .ni, #mnav .mni-item').forEach(b=> b.addEventListener('click', ()=>{ TAB=b.dataset.tab; render(); }));
 }
-async function reload(){ const b=$('#btn-sync'); if(b){b.classList.add('spin');} try{ await loadAll(); render(); toast('Aggiornato ✓'); }catch(e){ toast('Errore aggiornamento'); console.error(e);} finally{ if(b) b.classList.remove('spin'); } }
+async function reload(){ const b=$('#btn-sync'); if(b){b.classList.add('spin');} try{ await loadAll(); render(); toast('Aggiornato ✓'); }catch(e){ toast('Errore aggiornamento: '+errMsg(e), 4500); console.error(e);} finally{ if(b) b.classList.remove('spin'); } }
 function render(){
   $$('#sb .ni, #mnav .mni-item').forEach(b=> b.classList.toggle('on', b.dataset.tab===TAB));
   const nPrep=movDaPreparare().length;
@@ -435,7 +479,7 @@ function viewDash(){
   const prog=movProgrammati();
   const val=valoreParco();
   // rientri previsti nei prossimi 7 gg
-  const t=todayISO(); const d7=new Date(); d7.setDate(d7.getDate()+7); const t7=d7.toISOString().slice(0,10);
+  const t=todayISO(); const d7=new Date(); d7.setDate(d7.getDate()+7); const t7=isoLocale(d7);
   const rientri7=fuori.filter(m=>m.data_rientro && m.data_rientro>=t && m.data_rientro<=t7);
 
   const daPrep=movDaPreparare();
@@ -444,7 +488,7 @@ function viewDash(){
     ${daPrep.length?`<div class="prep-banner tap" onclick="goTab('prep')">📋 <b>${daPrep.length}</b> attrezzature da preparare${prepScad?` · <span style="color:var(--red)">${prepScad} da far uscire oggi o in ritardo</span>`:''}<span style="margin-left:auto">apri ›</span></div>`:''}
     <div class="kpis">
       <div class="kpi tap" onclick="goParco('tutti')"><div class="kn">${nRis}</div><div class="kl">Risorse</div><div class="ks">${nUniv} attrezzi · apri il parco ›</div></div>
-      <div class="kpi tap" onclick="goTab('mov')"><div class="kn">${fuori.length}</div><div class="kl">Fuori adesso</div><div class="ks">in cantiere / su mezzo ›</div></div>
+      <div class="kpi tap" onclick="goTab('mov')"><div class="kn">${fuori.length}</div><div class="kl">Fuori adesso</div><div class="ks">${ritardo.length?`di cui ${ritardo.length} in ritardo ›`:'in cantiere / su mezzo ›'}</div></div>
       <div class="kpi tap ${ritardo.length?'warn':''}" onclick="goTab('mov')"><div class="kn">${ritardo.length}</div><div class="kl">Rientri scaduti</div><div class="ks">${ritardo.length?'vai ai movimenti ›':'tutto ok'}</div></div>
       <div class="kpi tap" onclick="goParco('tutti')"><div class="kn" style="font-size:19px">${euro(val)}</div><div class="kl">Valore parco</div><div class="ks">${prog.length} usc. programmate ›</div></div>
     </div>`;
@@ -468,7 +512,7 @@ function viewDash(){
     Object.keys(byLuogo).sort().forEach(luogo=>{
       const items=byLuogo[luogo];
       html += `<div class="grp"><div class="grp-h">${items[0].a_tipo==='mezzo'?'🚐':'🏗️'} ${esc(luogo)} <span class="badge">${items.length}</span></div>`;
-      items.forEach(m=> html += rowMov(m, risById(m.risorsa_id), false, true));
+      items.forEach(m=> html += rowMov(m, risById(m.risorsa_id), isInRitardo(m,t), true));
       html += `</div>`;
     });
     html += `</div>`;
@@ -568,7 +612,7 @@ async function confermaUscitaPrep(m, q, d){
       await apiSend('POST','allocazioni',[nuova]);
     }
     await loadAll(); render(); toast('Uscita confermata ✓');
-  }catch(e){ console.error(e); toast('Errore conferma uscita'); }
+  }catch(e){ console.error(e); toast('Errore conferma uscita: '+errMsg(e), 4500); }
 }
 let _PREP_KEYS=[];
 async function uscitaTuttoPrep(i){
@@ -579,7 +623,7 @@ async function uscitaTuttoPrep(i){
   try{
     for(const m of items) await apiSend('PATCH','allocazioni?id=eq.'+m.id+'&stato=eq.programmata',{stato:'in_corso', data_uscita:todayISO(), aggiornato_il:new Date().toISOString()});
     await loadAll(); render(); toast('Uscita confermata ✓');
-  }catch(e){ console.error(e); toast('Errore conferma uscita'); }
+  }catch(e){ console.error(e); toast('Errore conferma uscita: '+errMsg(e), 4500); }
 }
 window.formUscitaPrep=formUscitaPrep; window.uscitaTuttoPrep=uscitaTuttoPrep;
 
@@ -680,7 +724,7 @@ function viewDep(){
   const mezzi=S.ubi.filter(u=>u.tipo==='mezzo');
   html+=`<div class="sec-lbl">🚐 Mezzi — cosa trasportano ora</div><div class="list">`;
   mezzi.forEach(u=>{
-    const sopra=S.mov.filter(m=> isAperto(m) && m.a_tipo==='mezzo' && (m.a_id===u.rif_id||m.a_nome===u.nome) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t));
+    const sopra=S.mov.filter(m=> isAperto(m) && !isDaPrepPrev(m) && m.a_tipo==='mezzo' && (m.a_id===u.rif_id||m.a_nome===u.nome) && m.data_uscita<=t);
     html+=`<div class="row" onclick="apriMezzo('${esc(u.id)}')"><div class="row-main"><div class="row-t">🚐 ${esc(u.nome)}</div>
       <div class="row-s">${sopra.length? sopra.map(m=>esc((risById(m.risorsa_id)||{}).nome||'?')).join(', ') : 'vuoto'}</div></div>
       <div class="row-r"><span class="badge">${sopra.length}</span><span class="chev">›</span></div></div>`;
@@ -774,7 +818,7 @@ function apriDeposito(id){
 function apriMezzo(id){
   const u=S.ubi.find(x=>x.id===id); if(!u) return;
   const t=todayISO(); const rif=u.rif_id||u.id;
-  const sopra=S.mov.filter(m=> isAperto(m) && m.a_tipo==='mezzo' && (m.a_id===rif||m.a_nome===u.nome) && m.data_uscita<=t && (!m.data_rientro||m.data_rientro>=t))
+  const sopra=S.mov.filter(m=> isAperto(m) && !isDaPrepPrev(m) && m.a_tipo==='mezzo' && (m.a_id===rif||m.a_nome===u.nome) && m.data_uscita<=t)
     .sort((a,b)=>(a.data_uscita||'').localeCompare(b.data_uscita||''));
   let body=`<div class="sec-lbl">🚐 A bordo adesso <span class="cnt">${sopra.length}</span></div>`;
   if(!sopra.length){ body+=`<div class="empty">Mezzo vuoto: nessuna risorsa a bordo.</div>`; }
@@ -831,14 +875,14 @@ function formRisorsa(r){
       if(isNew){ payload.id=uid(); payload.attiva=true; payload.natura='durevole'; await apiSend('POST','risorse',[payload]); }
       else{ await apiSend('PATCH','risorse?id=eq.'+encodeURIComponent(r.id), payload); }
       await loadAll(); closeSheet(); render(); toast(isNew?'Risorsa creata ✓':'Salvato ✓');
-    }catch(e){ console.error(e); toast('Errore salvataggio'); }
+    }catch(e){ console.error(e); toast('Errore salvataggio: '+errMsg(e), 4500); }
   });
 }
 async function eliminaRisorsa(id){
   if(movDi(id).length){ if(!confirm('Questa risorsa ha movimenti registrati. Preferisci disattivarla invece di eliminarla.\n\nEliminare comunque?')) return; }
   else if(!confirm('Eliminare la risorsa?')) return;
   try{ await apiSend('DELETE','risorse?id=eq.'+encodeURIComponent(id)); await loadAll(); closeSheet(); render(); toast('Eliminata'); }
-  catch(e){ console.error(e); toast('Errore: potrebbe avere movimenti collegati'); }
+  catch(e){ console.error(e); toast('Errore eliminazione (potrebbe avere movimenti collegati): '+errMsg(e), 5000); }
 }
 window.nuovaRisorsa=nuovaRisorsa; window.modificaRisorsa=modificaRisorsa; window.eliminaRisorsa=eliminaRisorsa;
 
@@ -909,24 +953,23 @@ function nuovoMovimento(tipo, preRis){
       origine:'app_risorse', note:f.elements['note'].value.trim()||null
     };
     try{
-      // Trasferimento da una posizione NON-deposito: storna le allocazioni aperte
-      // che si trovano su "da" (FIFO), così la risorsa non risulta in due posti.
-      // Stessa semantica del Planning (movTrasferimento → stato 'trasferita').
       if(tipo==='trasferimento' && daTipo!=='deposito'){
-        let resto=row.qty;
-        const fonti=movDi(r.id)
-          .filter(m=> isAperto(m) && isFuori(m) && (m.a_id===daId || m.a_nome===daNome))
-          .sort((a,b)=>(a.data_uscita||'').localeCompare(b.data_uscita||''));
-        for(const m of fonti){
-          if(resto<=0) break;
-          const mq=Number(m.qty)||0;
-          if(mq<=resto){ await apiSend('PATCH','allocazioni?id=eq.'+m.id,{stato:'trasferita', data_rientro:d1, data_rientro_effettiva:d1}); resto-=mq; }
-          else { await apiSend('PATCH','allocazioni?id=eq.'+m.id,{qty:mq-resto}); resto=0; }
-        }
+        // Trasferimento da una posizione NON-deposito: un'unica chiamata atomica al DB.
+        // La RPC chiude (FIFO, riduzione parziale) le allocazioni aperte su "da" il giorno
+        // PRIMA di d1 e inserisce la destinazione (in_corso / programmata): niente più
+        // stato a metà se una delle PATCH falliva, la risorsa non risulta in due posti.
+        await apiRpc('trasferisci_risorsa', {
+          p_risorsa_id:r.id, p_da_tipo:daTipo, p_da_id:daId, p_da_nome:daNome,
+          p_a_tipo:aTipo, p_a_id:aId, p_a_nome:aNome, p_qty:row.qty,
+          p_data:d1, p_data_rientro:d2, p_origine:'app_risorse', p_note:row.note,
+          p_deposito_id:r.deposito_base||null
+        });
+      } else {
+        await apiSend('POST','allocazioni',[row]);   // apiSend verifica che la riga sia stata inserita
       }
-      await apiSend('POST','allocazioni',[row]); await loadAll(); closeSheet(); render(); toast('Movimento registrato ✓');
+      await loadAll(); closeSheet(); render(); toast('Movimento registrato ✓');
     }
-    catch(e){ console.error(e); toast('Errore registrazione'); }
+    catch(e){ console.error(e); toast('Errore registrazione: '+errMsg(e), 4500); }
   });
 }
 function formRientro(){
@@ -941,16 +984,21 @@ function formRientro(){
   $('#frm-in').addEventListener('submit', async ev=>{
     ev.preventDefault(); const f=ev.target;
     const id=f.elements['mov'].value; const dr=f.elements['dr'].value;
-    try{ await apiSend('PATCH','allocazioni?id=eq.'+id, {data_rientro_effettiva:dr, data_rientro: dr, stato:'rientrata'}); await loadAll(); closeSheet(); render(); toast('Rientro registrato ✓'); }
-    catch(e){ console.error(e); toast('Errore rientro'); }
+    // "Rientra in": deposito effettivo di rientro (id|nome)
+    const dv=(f.elements['dove'].value||'').split('|'); const depId=dv[0]||null, depNm=dv.slice(1).join('|')||null;
+    try{ await apiSend('PATCH','allocazioni?id=eq.'+id, {data_rientro_effettiva:dr, data_rientro: dr, stato:'rientrata', rientro_deposito_id:depId, rientro_deposito_nome:depNm}); await loadAll(); closeSheet(); render(); toast('Rientro registrato ✓'); }
+    catch(e){ console.error(e); toast('Errore rientro: '+errMsg(e), 4500); }
   });
 }
 async function rientroRapido(id){
   const m=S.mov.find(x=>x.id===id); if(!m) return;
   const r=risById(m.risorsa_id);
   if(!confirm(`Registrare il rientro di "${r?r.nome:'?'}" (${num(m.qty)}) oggi?`)) return;
-  try{ await apiSend('PATCH','allocazioni?id=eq.'+id, {data_rientro_effettiva:todayISO(), data_rientro:todayISO(), stato:'rientrata'}); await loadAll(); render(); const h=$('#sheet-host'); if(h&&h.innerHTML) apriRisorsa(m.risorsa_id); toast('Rientro registrato ✓'); }
-  catch(e){ console.error(e); toast('Errore rientro'); }
+  const patch={data_rientro_effettiva:todayISO(), data_rientro:todayISO(), stato:'rientrata'};
+  // deposito di rientro: quello base della risorsa, se noto (altrimenti resta vuoto)
+  if(r && r.deposito_base){ patch.rientro_deposito_id=r.deposito_base; patch.rientro_deposito_nome=depNome(r.deposito_base)||null; }
+  try{ await apiSend('PATCH','allocazioni?id=eq.'+id, patch); await loadAll(); render(); const h=$('#sheet-host'); if(h&&h.innerHTML) apriRisorsa(m.risorsa_id); toast('Rientro registrato ✓'); }
+  catch(e){ console.error(e); toast('Errore rientro: '+errMsg(e), 4500); }
 }
 window.nuovoMovimento=nuovoMovimento; window.rientroRapido=rientroRapido;
 
@@ -964,7 +1012,7 @@ function nuovoDeposito(){
     try{ await apiSend('POST','depositi',[{id,nome,tipo:'deposito',note:f.elements['note'].value.trim()||null}]);
       await apiSend('POST','ubicazioni',[{id,nome,tipo:'deposito',rif_id:id}]);
       await loadAll(); closeSheet(); render(); toast('Deposito creato ✓'); }
-    catch(e){ console.error(e); toast('Errore'); } });
+    catch(e){ console.error(e); toast('Errore: '+errMsg(e), 4500); } });
 }
 function nuovoMezzo(){
   const body=`<form id="frm-mz">${fld('Nome / targa',`<input name="nome" required placeholder="es. GB649YN">`)}
@@ -973,9 +1021,12 @@ function nuovoMezzo(){
   openSheet('Nuova ubicazione', body);
   $('#frm-mz').addEventListener('submit', async ev=>{ ev.preventDefault(); const f=ev.target;
     const nome=f.elements['nome'].value.trim(); const tipo=f.elements['tipo'].value;
-    const id=tipo+'_'+nome.replace(/[^A-Za-z0-9]/g,'')||tipo+'_'+uid();
+    // id sicuro: targa ripulita + suffisso casuale (prima la precedenza di + / || rendeva
+    // inutile il fallback e targhe con caratteri speciali potevano collidere)
+    const slug=nome.replace(/[^A-Za-z0-9]/g,'').slice(0,24);
+    const id=tipo+'_'+(slug? slug+'_' : '')+uid();
     try{ await apiSend('POST','ubicazioni',[{id,nome,tipo,rif_id:nome}]); await loadAll(); closeSheet(); render(); toast('Aggiunto ✓'); }
-    catch(e){ console.error(e); toast('Errore'); } });
+    catch(e){ console.error(e); toast('Errore: '+errMsg(e), 4500); } });
 }
 // Elimina un deposito (utile per i doppioni). Protetto: non elimina se ha
 // risorse con base lì o è usato nei movimenti (niente risorse orfane).
@@ -993,9 +1044,13 @@ async function eliminaDeposito(id){
   if(!confirm('Eliminare il deposito "'+d.nome+'"?\nNon ha risorse né movimenti collegati.')) return;
   try{
     await apiSend('DELETE','depositi?id=eq.'+encodeURIComponent(id));
-    try{ await apiSend('DELETE','ubicazioni?or=(id.eq.'+encodeURIComponent(id)+',rif_id.eq.'+encodeURIComponent(id)+')'); }catch(_){}
-    await loadAll(); render(); toast('Deposito eliminato ✓');
-  }catch(e){ console.error(e); toast('Errore eliminazione'); }
+    // ubicazione gemella: 0 righe va bene (può non esistere), un errore va segnalato
+    let avvisoUbi='';
+    try{ await apiSend('DELETE','ubicazioni?or=(id.eq.'+encodeURIComponent(id)+',rif_id.eq.'+encodeURIComponent(id)+')', null, {allowEmpty:true}); }
+    catch(e2){ console.error('ubicazione del deposito non eliminata', e2); avvisoUbi=errMsg(e2); }
+    await loadAll(); render();
+    toast(avvisoUbi ? 'Deposito eliminato, ma ubicazione collegata non rimossa: '+avvisoUbi : 'Deposito eliminato ✓', avvisoUbi?5000:2200);
+  }catch(e){ console.error(e); toast('Errore eliminazione: '+errMsg(e), 4500); }
 }
 window.nuovoDeposito=nuovoDeposito; window.nuovoMezzo=nuovoMezzo; window.eliminaDeposito=eliminaDeposito;
 
@@ -1203,7 +1258,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidd
 .save:active{background:var(--brand-d)}
 .del{border:1px solid var(--red);background:var(--surface);color:var(--red);border-radius:11px;padding:14px 16px;font-weight:700;cursor:pointer}
 /* toast */
-#toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom)+80px);transform:translateX(-50%) translateY(20px);background:var(--brand);color:#fff;padding:11px 20px;border-radius:12px;font-weight:700;font-size:13.5px;opacity:0;transition:all .25s;z-index:2000;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.25);white-space:nowrap}
+#toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom)+80px);transform:translateX(-50%) translateY(20px);background:var(--brand);color:#fff;padding:11px 20px;border-radius:12px;font-weight:700;font-size:13.5px;opacity:0;transition:all .25s;z-index:2000;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.25);white-space:normal;max-width:calc(100vw - 32px);width:max-content;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 /* Toast centrato sul contenuto anche su desktop */
 @media(min-width:821px){
